@@ -15,6 +15,7 @@ from src.knowledge_distillation import KnowledgeDistillation
 from src.parameter_groups import (
     allowed_modalities,
     classify_parameter,
+    classify_trainable_parameters,
     is_vision_parameter,
 )
 
@@ -312,147 +313,228 @@ class CreamAggregator:
     # 核心聚合方法
     # ──────────────────────────────────────────────────────────────────
 
-    def aggregate_weights(
+    def _validate_parameterwise_aggregation_inputs(
         self,
-        client_weights: List[Optional[Dict[str, torch.Tensor]]],
-        client_public_reps: List[torch.Tensor],
-        global_features_for_contrastive: Optional[torch.Tensor] = None,
-        client_modalities: Optional[List[str]] = None
-    ) -> Dict[str, torch.Tensor]:
-        """
-        使用 CreamFL 方法聚合客户端模型权重（含解耦聚合路由）。
-
-        Args:
-            client_weights:                  客户端模型状态字典列表（可含 None）
-            client_public_reps:              客户端公共数据表征列表
-            global_features_for_contrastive: 用于对比权重计算的全局特征（可选）
-            client_modalities:               客户端模态列表，用于解耦聚合路由
-        Returns:
-            聚合后的全局模型状态字典
-        """
-        # ── 步骤 1: 安全过滤，剔除 weights 为 None 的客户端 ──
-        valid = [
-            (w, client_public_reps[i], client_modalities[i] if client_modalities else None)
-            for i, w in enumerate(client_weights)
-            if w is not None
-        ]
-        if not valid:
-            print("⚠️ 警告: 所有客户端的 weights 为 None，跳过模型聚合")
-            return self.global_model.state_dict()
-
-        total_clients      = len(client_weights)
-        client_weights     = [v[0] for v in valid]
-        client_public_reps = [v[1] for v in valid]
-        client_modalities  = [v[2] for v in valid] if valid[0][2] is not None else None
-        num_clients        = len(client_weights)
-        print(f"[Safe Filter] 有效客户端: {num_clients}/{total_clients}")
-
-        # ── 步骤 2: 动态参数集合构建 ──
-        all_param_names = set()
-        for w in client_weights:
-            all_param_names.update(w.keys())
-        if not all_param_names:
-            print("⚠️ 警告: 客户端上传的参数集合为空，跳过模型聚合")
-            return self.global_model.state_dict()
-        print(f"[Dynamic Aggregation] 检测到 {len(all_param_names)} 个唯一参数需要聚合")
-
-        # ── 步骤 4: 计算聚合权重 ──
-        use_contrastive = (
-            self.aggregation_method == "contrastive_weighted"
-            and self.contrastive_aggregator is not None
-        )
-        use_contrastive_decoupled = use_contrastive and (
-            client_modalities is not None and len(client_modalities) == num_clients
-        )
-
-        if self.aggregation_method == "similarity_weighted":
-            agg_weights = self._compute_similarity_weights(client_public_reps, self.global_image_rep)
-        elif not use_contrastive:
-            agg_weights = torch.ones(num_clients, device=self.device) / num_clients
-        else:
-            agg_weights = None  # contrastive 路径在参数循环内按子集计算
-
-        # ── 步骤 5: 参数级解耦聚合循环 ──
-        if global_features_for_contrastive is None:
-            global_features_for_contrastive = self.global_image_rep.unsqueeze(0)
-
-        aggregated_state: Dict[str, torch.Tensor] = {}
-        decoupled_stats: Dict[str, List[int]] = {}
-
-        if use_contrastive_decoupled:
-            print("[Decoupled Contrastive Aggregation] 使用动态解耦对比权重聚合")
-
-        for param_name in all_param_names:
-            participating_indices = self._get_participating_clients_dynamic(
-                param_name, client_weights, client_modalities
+        round_global_parameters: Dict[str, torch.Tensor],
+        client_updates: Dict[str, Dict[str, torch.Tensor]],
+        client_modalities: Dict[str, str],
+        client_sample_counts: Dict[str, int],
+        routing_mode: str,
+    ) -> Tuple[List[str], Dict[str, str]]:
+        if self.aggregation_method != "fedavg":
+            raise ValueError(
+                "Parameterwise U/R aggregation requires aggregation_method='fedavg'"
             )
-            if not participating_indices:
-                continue
-
-            ptype = (
-                'mask_decoder' if 'mask_decoder' in param_name else
-                'text_encoder' if 'text_encoder' in param_name else
-                'adapter'      if 'adapter'      in param_name else
-                'other'
+        if routing_mode not in {"unrestricted", "restricted"}:
+            raise ValueError(
+                "routing_mode must be 'unrestricted' or 'restricted'"
             )
-            if ptype not in decoupled_stats:
-                decoupled_stats[ptype] = [0, 0]  # [累计参与客户端数, 参数数量]
-            decoupled_stats[ptype][0] += len(participating_indices)
-            decoupled_stats[ptype][1] += 1
 
-            if use_contrastive_decoupled:
-                # 对比权重路径：按参与子集聚合
-                p_weights = [client_weights[i] for i in participating_indices if param_name in client_weights[i]]
-                p_reps    = [client_public_reps[i] for i in participating_indices if param_name in client_weights[i]]
-                if not p_weights:
-                    continue
-                if len(p_weights) == 1:
-                    aggregated_state[param_name] = p_weights[0][param_name].clone().to(self.device)
-                else:
-                    param_agg = self.contrastive_aggregator.aggregate_model_weights(
-                        p_weights, p_reps, global_features_for_contrastive
-                    )
-                    if param_name in param_agg:
-                        aggregated_state[param_name] = param_agg[param_name]
-                    else:
-                        gsd = self.global_model.state_dict()
-                        if param_name in gsd:
-                            aggregated_state[param_name] = gsd[param_name].clone()
-                            if self._is_vision_param(param_name):
-                                print(f"  [ContraAgg Fallback] 视觉参数 '{param_name}' 未在聚合器输出中，已保留全局当前值")
-            else:
-                # 加权/均匀聚合路径
-                param_list = []
-                weight_list = []
-                for idx in participating_indices:
-                    if idx < len(client_weights) and param_name in client_weights[idx]:
-                        p = client_weights[idx][param_name].to(self.device)
-                        param_list.append(p)
-                        weight_list.append(agg_weights[idx])
+        active_client_ids = sorted(client_updates)
+        if not active_client_ids:
+            raise ValueError("At least one active client update is required")
+        expected_client_ids = set(active_client_ids)
+        if (
+            set(client_modalities) != expected_client_ids
+            or set(client_sample_counts) != expected_client_ids
+        ):
+            raise ValueError(
+                "client_updates, client_modalities, and client_sample_counts "
+                "must contain the same client IDs"
+            )
 
-                if not param_list:
-                    continue
+        valid_modalities = {"text_only", "image_only", "multimodal"}
+        for client_id in active_client_ids:
+            sample_count = client_sample_counts[client_id]
+            if (
+                not isinstance(sample_count, int)
+                or isinstance(sample_count, bool)
+                or sample_count <= 0
+            ):
+                raise ValueError(
+                    f"client_sample_counts[{client_id}] must be a positive integer"
+                )
+            if client_modalities[client_id] not in valid_modalities:
+                raise ValueError(
+                    f"Unsupported client modality for {client_id}: "
+                    f"{client_modalities[client_id]}"
+                )
+            if not isinstance(client_updates[client_id], dict):
+                raise TypeError(f"client_updates[{client_id}] must be a dictionary")
 
-                w_tensor = torch.tensor(weight_list, device=self.device)
-                w_sum = w_tensor.sum()
-                w_tensor = w_tensor / w_sum if w_sum > 1e-8 else torch.full_like(w_tensor, 1.0 / len(param_list))
+        model_parameters = {
+            name: parameter
+            for name, parameter in self.global_model.named_parameters()
+            if parameter.requires_grad
+        }
+        if set(round_global_parameters) != set(model_parameters):
+            missing = sorted(set(model_parameters) - set(round_global_parameters))
+            unexpected = sorted(set(round_global_parameters) - set(model_parameters))
+            raise ValueError(
+                "round_global_parameters must contain exactly the trainable named "
+                f"parameters; missing={missing[:5]}, unexpected={unexpected[:5]}"
+            )
 
-                stacked = torch.stack(param_list, dim=0)
-                aggregated_state[param_name] = torch.sum(
-                    stacked * w_tensor.view(-1, *([1] * (stacked.dim() - 1))), dim=0
+        parameter_groups = classify_trainable_parameters(model_parameters)
+        for parameter_name, global_parameter in round_global_parameters.items():
+            model_parameter = model_parameters[parameter_name]
+            if not isinstance(global_parameter, torch.Tensor):
+                raise TypeError(
+                    f"round-global value for {parameter_name} must be a tensor"
+                )
+            if global_parameter.shape != model_parameter.shape:
+                raise ValueError(
+                    f"round-global shape mismatch for {parameter_name}: "
+                    f"expected {tuple(model_parameter.shape)}, "
+                    f"got {tuple(global_parameter.shape)}"
+                )
+            if global_parameter.dtype != model_parameter.dtype:
+                raise ValueError(
+                    f"round-global dtype mismatch for {parameter_name}: "
+                    f"expected {model_parameter.dtype}, got {global_parameter.dtype}"
                 )
 
-        if decoupled_stats:
-            print("动态解耦聚合统计:")
-            for ptype, (total_participants, param_count) in decoupled_stats.items():
-                avg = total_participants / param_count if param_count > 0 else 0
-                print(f"  - {ptype}: {param_count} 个参数，平均 {avg:.1f}/{num_clients} 客户端参与")
+        for client_id, update in client_updates.items():
+            for parameter_name, local_parameter in update.items():
+                if parameter_name not in model_parameters:
+                    raise ValueError(
+                        f"Client {client_id} uploaded a non-trainable or buffer key: "
+                        f"{parameter_name}"
+                    )
+                if not isinstance(local_parameter, torch.Tensor):
+                    raise TypeError(
+                        f"Client {client_id} uploaded a non-tensor value for "
+                        f"{parameter_name}"
+                    )
+                global_parameter = round_global_parameters[parameter_name]
+                if local_parameter.shape != global_parameter.shape:
+                    raise ValueError(
+                        f"Client {client_id} upload shape mismatch for "
+                        f"{parameter_name}: expected {tuple(global_parameter.shape)}, "
+                        f"got {tuple(local_parameter.shape)}"
+                    )
+                if local_parameter.dtype != global_parameter.dtype:
+                    raise ValueError(
+                        f"Client {client_id} upload dtype mismatch for "
+                        f"{parameter_name}: expected {global_parameter.dtype}, "
+                        f"got {local_parameter.dtype}"
+                    )
 
-        return self._apply_aggregated_state(
-            aggregated_state,
-            location_tag="防回归补齐[aggregate_weights]",
-            expected_param_names=all_param_names,
+        return active_client_ids, parameter_groups
+
+    def aggregate_weights(
+        self,
+        *,
+        round_global_parameters: Dict[str, torch.Tensor],
+        client_updates: Dict[str, Dict[str, torch.Tensor]],
+        client_modalities: Dict[str, str],
+        client_sample_counts: Dict[str, int],
+        routing_mode: str,
+    ) -> Dict[str, torch.Tensor]:
+        """Aggregate optimizer-scoped parameter deltas under the U/R contract."""
+        active_client_ids, parameter_groups = (
+            self._validate_parameterwise_aggregation_inputs(
+                round_global_parameters=round_global_parameters,
+                client_updates=client_updates,
+                client_modalities=client_modalities,
+                client_sample_counts=client_sample_counts,
+                routing_mode=routing_mode,
+            )
         )
+
+        aggregated_parameters: Dict[str, torch.Tensor] = {}
+        parameter_audit: Dict[str, Dict[str, Any]] = {}
+        empty_eligible_parameter_names: List[str] = []
+
+        for parameter_name in sorted(round_global_parameters):
+            parameter_group = parameter_groups[parameter_name]
+            global_parameter = round_global_parameters[parameter_name].to(self.device)
+            uploaded_client_ids = [
+                client_id
+                for client_id in active_client_ids
+                if parameter_name in client_updates[client_id]
+            ]
+
+            if routing_mode == "unrestricted":
+                eligible_client_ids = list(active_client_ids)
+            else:
+                allowed = allowed_modalities(parameter_group)
+                eligible_client_ids = [
+                    client_id
+                    for client_id in uploaded_client_ids
+                    if client_modalities[client_id] in allowed
+                ]
+
+            empty_eligible = not eligible_client_ids
+            if empty_eligible:
+                aggregated_parameters[parameter_name] = global_parameter.clone()
+                empty_eligible_parameter_names.append(parameter_name)
+                parameter_audit[parameter_name] = {
+                    "parameter_group": parameter_group,
+                    "uploaded_client_ids": uploaded_client_ids,
+                    "eligible_client_ids": [],
+                    "zero_update_client_ids": [],
+                    "sample_weights": {},
+                    "normalized_weights": {},
+                    "empty_eligible": True,
+                }
+                continue
+
+            denominator = sum(
+                client_sample_counts[client_id]
+                for client_id in eligible_client_ids
+            )
+            aggregated_delta = torch.zeros_like(global_parameter)
+            zero_update_client_ids: List[str] = []
+            normalized_weights: Dict[str, float] = {}
+
+            for client_id in eligible_client_ids:
+                normalized_weight = (
+                    client_sample_counts[client_id] / float(denominator)
+                )
+                normalized_weights[client_id] = normalized_weight
+                if parameter_name in client_updates[client_id]:
+                    local_parameter = client_updates[client_id][parameter_name].to(
+                        self.device
+                    )
+                    delta = local_parameter - global_parameter
+                else:
+                    delta = torch.zeros_like(global_parameter)
+
+                if torch.count_nonzero(delta).item() == 0:
+                    zero_update_client_ids.append(client_id)
+                aggregated_delta = aggregated_delta + normalized_weight * delta
+
+            aggregated_parameters[parameter_name] = (
+                global_parameter + aggregated_delta
+            )
+            parameter_audit[parameter_name] = {
+                "parameter_group": parameter_group,
+                "uploaded_client_ids": uploaded_client_ids,
+                "eligible_client_ids": eligible_client_ids,
+                "zero_update_client_ids": zero_update_client_ids,
+                "sample_weights": {
+                    client_id: client_sample_counts[client_id]
+                    for client_id in eligible_client_ids
+                },
+                "normalized_weights": normalized_weights,
+                "empty_eligible": False,
+            }
+
+        self._last_aggregation_audit = {
+            "aggregation_method": "fedavg",
+            "routing_mode": routing_mode,
+            "active_client_ids": active_client_ids,
+            "client_sample_counts": {
+                client_id: client_sample_counts[client_id]
+                for client_id in active_client_ids
+            },
+            "parameter_key_count": len(aggregated_parameters),
+            "buffer_key_count": len(dict(self.global_model.named_buffers())),
+            "empty_eligible_parameter_names": empty_eligible_parameter_names,
+            "parameters": parameter_audit,
+        }
+        return aggregated_parameters
 
     def _update_global_reps_decoupled(
         self,
