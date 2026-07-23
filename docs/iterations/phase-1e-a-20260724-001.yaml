@@ -56,4 +56,6 @@ local_prohibited_actions:
   - model_forward
   - model_backward
 backup_tag: backup/pre-phase-1e-a-20260724-001
-status: STATIC_VALIDATED
+implementation_commit: a773e876de34c6775b0066af2b65075a8ce0510c
+origin_main_confirmed: a773e876de34c6775b0066af2b65075a8ce0510c
+status: REMOTE_VERIFIED
