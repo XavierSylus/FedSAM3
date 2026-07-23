@@ -162,6 +162,7 @@ class FederatedTrainer:
         self.client_configs = None
         self.client_trainers = None
         self.client_states = None
+        self.client_sample_counts: Dict[str, int] = {}
         self.val_loader = None
         self.logger = None
         
@@ -180,8 +181,9 @@ class FederatedTrainer:
             'lr_history': [],          # 每轮主干 LR（float）
             'gpu_mem_mb': [],          # 每轮 GPU 峰值显存（MB），CPU 环境为 0
             'round_time_sec': [],      # 每轮完整训练耗时（秒）
-            'grad_conflict_deg': [],   # adapter 梯度冲突角（度），Group A 无多模态时记录 None
+            'grad_conflict_deg': [],   # adapter 梯度冲突角（度），无图像或多模态对时记录 None
             'parameter_group_diagnostics': [],
+            'aggregation_audits': [],
         }
         self.last_val_metrics = {}
         self.best_val_dice = 0.0
@@ -225,38 +227,57 @@ class FederatedTrainer:
             enabled_clients[norm_id] = client_cfg
         return enabled_clients
 
-    def _validate_group_protocol(self, enabled_clients: Dict[str, Dict[str, Any]]) -> None:
-        exp_name = str(getattr(self.config, "experiment_name", "") or "").lower()
-        modalities = sorted(str(c.get("modality", "")).strip() for c in enabled_clients.values())
-        lambda_cream = float(getattr(self.config, "lambda_cream", 0.0))
-        agg = str(getattr(self.config, "aggregation_method", "")).lower()
-        use_decoupled = bool(getattr(self.config, "use_decoupled_agg", False))
+    def _validate_federated_protocol(
+        self, enabled_clients: Dict[str, Dict[str, Any]]
+    ) -> None:
+        modalities = {
+            str(client_cfg.get("modality", "")).strip()
+            for client_cfg in enabled_clients.values()
+        }
+        invalid_modalities = modalities - {
+            "text_only", "image_only", "multimodal"
+        }
+        if not modalities or invalid_modalities:
+            raise ValueError(
+                "Federated protocol has invalid enabled client modalities: "
+                f"{sorted(invalid_modalities)}"
+            )
 
-        if "groupa" in exp_name or "group_a" in exp_name:
-            if modalities != ["image_only"]:
-                raise ValueError(f"Group A protocol mismatch: modalities={modalities}")
-            if use_decoupled:
-                raise ValueError("Group A protocol mismatch: use_decoupled_agg must be false")
-            if abs(lambda_cream) > 1e-12:
-                raise ValueError(f"Group A protocol mismatch: lambda_cream must be 0, got {lambda_cream}")
+        aggregation_method = str(
+            getattr(self.config, "aggregation_method", "")
+        ).lower()
+        routing_mode = str(getattr(self.config, "routing_mode", "")).lower()
+        sample_weight_unit = str(
+            getattr(self.config, "sample_weight_unit", "")
+        ).lower()
+        update_policy = str(
+            getattr(self.config, "unoptimized_update_policy", "")
+        ).lower()
+        expected_policy = {
+            "unrestricted": "include_zero",
+            "restricted": "exclude_and_renormalize",
+        }
 
-        if "groupb" in exp_name or "group_b" in exp_name:
-            if modalities != ["image_only", "multimodal"]:
-                raise ValueError(f"Group B protocol mismatch: modalities={modalities}")
-            if use_decoupled:
-                raise ValueError("Group B protocol mismatch: use_decoupled_agg must be false")
-            if lambda_cream <= 0:
-                raise ValueError(f"Group B protocol mismatch: lambda_cream must be > 0, got {lambda_cream}")
-            if agg != "fedavg":
-                raise ValueError(f"Group B protocol mismatch: aggregation_method must be fedavg, got {agg}")
-
-        if "groupc" in exp_name or "group_c" in exp_name:
-            if modalities != ["image_only", "multimodal"]:
-                raise ValueError(f"Group C protocol mismatch: modalities={modalities}")
-            if not use_decoupled:
-                raise ValueError("Group C protocol mismatch: use_decoupled_agg must be true")
-            if lambda_cream <= 0:
-                raise ValueError(f"Group C protocol mismatch: lambda_cream must be > 0, got {lambda_cream}")
+        if aggregation_method != "fedavg":
+            raise ValueError(
+                "Federated protocol requires aggregation_method='fedavg', "
+                f"got {aggregation_method!r}"
+            )
+        if routing_mode not in expected_policy:
+            raise ValueError(
+                "Federated protocol requires routing_mode 'unrestricted' or "
+                f"'restricted', got {routing_mode!r}"
+            )
+        if sample_weight_unit != "private_cases":
+            raise ValueError(
+                "Federated protocol requires sample_weight_unit='private_cases', "
+                f"got {sample_weight_unit!r}"
+            )
+        if update_policy != expected_policy[routing_mode]:
+            raise ValueError(
+                "Federated protocol has an invalid unoptimized update policy: "
+                f"routing_mode={routing_mode!r}, policy={update_policy!r}"
+            )
 
     def _validate_client_protocol_after_filter(self) -> None:
         if not bool(getattr(self.config, "strict_protocol_check", True)):
@@ -296,10 +317,38 @@ class FederatedTrainer:
         if modality_mismatches:
             raise ValueError("Protocol check failed: " + "; ".join(modality_mismatches))
 
-        self._validate_group_protocol(expected_clients)
+        self._validate_federated_protocol(expected_clients)
+
+    def _derive_private_case_counts(self) -> Dict[str, int]:
+        """Return the fixed FedAvg weight for each enabled private dataset."""
+        if not self.client_configs:
+            raise RuntimeError("Cannot derive private case counts without clients")
+
+        private_case_counts: Dict[str, int] = {}
+        for client_id in sorted(self.client_configs):
+            client_config = self.client_configs[client_id]
+            private_loader = client_config.get("private_loader")
+            if private_loader is None or not hasattr(private_loader, "dataset"):
+                raise RuntimeError(
+                    f"Client {client_id} has no private loader dataset for FedAvg "
+                    "sample weighting"
+                )
+            private_case_count = len(private_loader.dataset)
+            if (
+                isinstance(private_case_count, bool)
+                or not isinstance(private_case_count, int)
+                or private_case_count <= 0
+            ):
+                raise ValueError(
+                    f"Client {client_id} private_case_count must be a positive "
+                    f"integer, got {private_case_count!r}"
+                )
+            private_case_counts[client_id] = private_case_count
+
+        return private_case_counts
 
     def _should_enable_text_assist_in_seg(self) -> bool:
-        """文本辅助分割与是否解耦聚合解耦，避免 C 组把监督一并关掉。"""
+        """Keep text-assisted segmentation independent from aggregation routing."""
         return bool(getattr(self.config, "enable_text_assist_in_seg", True))
 
     def _segmentation_trainer_kwargs(self) -> Dict[str, Any]:
@@ -384,7 +433,18 @@ class FederatedTrainer:
             "weight_decay": float(getattr(self.config, "weight_decay", 0.0)),
             "lambda_cream": float(getattr(self.config, "lambda_cream", 0.0)),
             "aggregation_method": str(getattr(self.config, "aggregation_method", "")).lower(),
-            "use_decoupled_agg": bool(getattr(self.config, "use_decoupled_agg", False)),
+            "routing_mode": str(getattr(self.config, "routing_mode", "")).lower(),
+            "sample_weight_unit": str(
+                getattr(self.config, "sample_weight_unit", "")
+            ).lower(),
+            "unoptimized_update_policy": str(
+                getattr(self.config, "unoptimized_update_policy", "")
+            ).lower(),
+            "client_sample_count_unit": "private_case_count",
+            "client_sample_counts": {
+                client_id: int(self.client_sample_counts[client_id])
+                for client_id in sorted(self.client_sample_counts)
+            },
             "baseline_method": str(getattr(self.config, "baseline_method", "none")).lower(),
             "fedprox_mu": float(getattr(self.config, "fedprox_mu", 0.0)),
             "client_init_policy": str(
@@ -465,7 +525,7 @@ class FederatedTrainer:
             self.device = "cpu"
         self._set_random_seed()
 
-        # 初始化全局模型（num_classes 从 config 读取，Group A=1，多模态全集=3）
+        # Initialize the globally shared BraTS [WT, TC, ET] model.
         self.global_model = SAM3_Medical(
             img_size=self.config.img_size,
             num_classes=self.config.num_classes,
@@ -559,11 +619,15 @@ class FederatedTrainer:
                 print(f"[Config-Driven Filter] 保留客户端: {list(self.client_configs.keys())}")
 
             self._validate_client_protocol_after_filter()
+            self.client_sample_counts = self._derive_private_case_counts()
 
 
             print(f"    - {len(self.client_configs)} 个客户端配置已创建")
             for client_id, cfg in self.client_configs.items():
-                print(f"      * {client_id}: {cfg['modality']}")
+                print(
+                    f"      * {client_id}: {cfg['modality']}, "
+                    f"private_case_count={self.client_sample_counts[client_id]}"
+                )
         except Exception as e:
             print(f"\n错误: 客户端配置设置失败")
             print(f"详细信息: {e}")
@@ -982,7 +1046,6 @@ class FederatedTrainer:
         print(f"{'=' * 60}")
         
         round_client_updates = {}
-        round_client_reps = {}
         round_client_stats = {}
         round_client_grad_vectors = {}
         fedprox_mode = str(getattr(self.config, 'baseline_method', 'none')).lower() == 'fedprox'
@@ -1167,18 +1230,37 @@ class FederatedTrainer:
                 # 优先使用图像表征，如果不存在则使用文本表征
                 local_reps = img_rep if img_rep is not None else txt_rep
 
-                # ★ Fix High 3 (2026-03-13): 保留客户端训练结果
-                # 原来把 updated_weights 覆盖为全局模型状态，导致客户端梯度更新被丢弃，
-                # 每轮聚合的都是全局模型自身参数，联邦学习实质上空跑。
-                # 修复：updated_weights 已由 client.get_model_state() 过滤
-                # （只含 requires_grad=True 参数，排除 RoPE buffer），直接使用即可。
-                # 此处只做防御性的 RoPE key 二次过滤，确保不含任何 buffer。
-                if updated_weights is not None:
-                    _rope_filter = {'freqs_cis', 'freqs_cos', 'freqs_sin', 'relative_coords'}
-                    updated_weights = {
-                        k: v for k, v in updated_weights.items()
-                        if not any(rk in k for rk in _rope_filter)
-                    }
+                if updated_weights is None:
+                    raise RuntimeError(
+                        f"Client {client_id} returned no optimizer upload payload"
+                    )
+                optimizer_parameter_names = set(
+                    trainer.get_active_optimizer_parameter_names()
+                )
+                upload_parameter_names = set(updated_weights)
+                if upload_parameter_names != optimizer_parameter_names:
+                    raise RuntimeError(
+                        f"Client {client_id} upload keys do not equal its optimizer "
+                        f"parameter keys: upload_only="
+                        f"{sorted(upload_parameter_names - optimizer_parameter_names)}, "
+                        f"optimizer_only="
+                        f"{sorted(optimizer_parameter_names - upload_parameter_names)}"
+                    )
+                for parameter_name in sorted(upload_parameter_names):
+                    round_global_parameter = round_global_state.get(parameter_name)
+                    if round_global_parameter is None:
+                        raise RuntimeError(
+                            f"Client {client_id} uploaded parameter absent from the "
+                            f"round-global snapshot: {parameter_name}"
+                        )
+                    parameter_delta = (
+                        updated_weights[parameter_name] - round_global_parameter
+                    )
+                    if not torch.isfinite(parameter_delta).all():
+                        raise RuntimeError(
+                            f"Client {client_id} produced a non-finite parameter delta: "
+                            f"{parameter_name}"
+                        )
 
                 print(
                     f"      Loss: {stats.get('avg_loss', 0):.4f}, "
@@ -1196,27 +1278,18 @@ class FederatedTrainer:
             # Step 4: 保存客户端状态回 CPU（内存安全）
             print(f"  [4/5] Saving state to CPU cache...")
 
-            # ★ 修复 (2026-03-14): 统一保存所有模态返回的有效权重
-            # 原逻辑把 text_only 的权重强制置 None，导致 text_proj 训练更新永远丢失，
-            # 全局文本对齐能力永远在原地踏步 —— 这是逻辑闭环断裂的致命漏洞。
-            # 修复：无论什么模态，只要 updated_weights 非空，就写入 CPU 缓存。
-            # text_only 客户端返回的 text_only_state 里只含 text_proj 相关键，
-            # 上传给 Server 后聚合代码会按键名做局部覆盖，其余参数保持全局值不变。
-            if updated_weights is not None:
-                self.client_states[client_id]['weights'] = {k: v.cpu() for k, v in updated_weights.items()}
-                if cfg['modality'] == 'text_only':
-                    print(f"      [text_only] Saved text-related weights (e.g., fusion_head.text_proj)")
-            else:
-                # 异常情况防御：所有模态都不应该返回 None 权重
-                print(f"      [Warning] {client_id} ({cfg['modality']}) returned None weights, falling back to global model")
-                self.client_states[client_id]['weights'] = {k: v.cpu().clone() for k, v in self.global_model.state_dict().items()}
+            self.client_states[client_id]['weights'] = {
+                parameter_name: updated_weights[parameter_name].detach().cpu().clone()
+                for parameter_name in sorted(upload_parameter_names)
+            }
 
             if self._should_restore_client_optimizer():
                 self.client_states[client_id]['opt_state'] = optimizer.state_dict()
             else:
                 self.client_states[client_id]['opt_state'] = None
 
-            # 保存本地表征（用于聚合）
+            # Keep local representations for diagnostics; global round proxies are
+            # generated from fixed public multimodal data, not client uploads.
             if local_reps is not None:
                 self.client_states[client_id]['local_reps'] = local_reps.cpu() if local_reps.device.type != 'cpu' else local_reps
             else:
@@ -1226,15 +1299,9 @@ class FederatedTrainer:
             # Step 5: 收集更新
             print(f"  [5/5] Collecting updates...")
 
-            # ★ 修复 (2026-03-14): 所有客户端统一上传各自的权重字典
-            # text_only 上传只含 text_proj 的局部字典 → Server FedAvg 按键名局部覆盖
-            # image_only 上传不含 text_proj 的字典 → Server 补全 text_proj 用全局值
-            # multimodal 上传完整字典
-            # Server 端 aggregate_weights 已有按键名补全机制，可安全处理局部字典
             round_client_updates[client_id] = self.client_states[client_id]['weights']
-            print(f"      [OK] Collected weights and representations from {client_id}")
+            print(f"      [OK] Collected optimizer-scoped upload from {client_id}")
 
-            round_client_reps[client_id] = self.client_states[client_id]['local_reps']
             round_client_stats[client_id] = stats
             
             # 清理 GPU 内存
@@ -1244,56 +1311,45 @@ class FederatedTrainer:
             print(f"  [OK] {client_id} completed")
         
         # === 服务器聚合 ===
-        # ★ 修复 (2026-03-14): 所有客户端均上传各自的权重字典
-        #   text_only   → 只含 text_proj 的局部字典
-        #   image_only  → 不含 text_proj 的局部字典
-        #   multimodal  → 完整字典
-        # aggregate_weights 会用全局模型 state_dict 补全缺失键，再做 FedAvg
-
-        # 统计有效的权重上传数量（所有模态都应非 None）
-        valid_weight_clients = {cid: w for cid, w in round_client_updates.items() if w is not None}
-        num_valid_weights = len(valid_weight_clients)
-        num_total_clients = len(round_client_updates)
-
-        print(f"\n[Aggregation] Collected {num_total_clients} client updates:")
-        print(f"  - With model weights: {num_valid_weights} clients (will participate in FedAvg)")
-        if num_total_clients - num_valid_weights > 0:
-            print(f"  - ⚠ {num_total_clients - num_valid_weights} client(s) returned None weights (unexpected)")
-
-        # 使用 sorted() 确保严格的确定性
         client_ids_sorted = sorted(round_client_updates.keys())
+        client_modality_map = {
+            client_id: str(self.client_configs[client_id]['modality'])
+            for client_id in client_ids_sorted
+        }
+        client_sample_counts = {
+            client_id: self.client_sample_counts[client_id]
+            for client_id in client_ids_sorted
+        }
+        client_modalities = [client_modality_map[client_id] for client_id in client_ids_sorted]
+        print(
+            f"\n[Aggregation] routing={self.config.routing_mode}, "
+            f"clients={client_ids_sorted}, private_case_counts={client_sample_counts}"
+        )
 
-        # ★ 修复A：解耦聚合模态路由——必须从 client_configs（已过滤的实验子集）提取
-        # 原Bug：从 config.clients（配置全集）提取，Group A 过滤后ID错位导致 client_modalities=None
-        # 修复：直接从 self.client_configs 建立映射，严格对应 client_ids_sorted
-        # 同时移除 use_decoupled_agg 条件守卫：单模态实验同样需要解耦路由保证视觉参数进入聚合
-        client_modality_map = {cid: cfg['modality'] for cid, cfg in self.client_configs.items()}
-        client_modalities = [client_modality_map.get(cid, 'image_only') for cid in client_ids_sorted]
-        print(f"  [Decoupled Agg] 客户端模态（来源: client_configs）: {client_modalities}")
-
-        # 探针 modality 独立保留，不受路由开关影响
         grad_conflict_deg = compute_gradient_conflict_from_vectors(
-            [round_client_grad_vectors[cid] for cid in client_ids_sorted],
+            [round_client_grad_vectors[client_id] for client_id in client_ids_sorted],
             client_modalities,
         )
         self.server._last_grad_conflict_deg = grad_conflict_deg
-        probe_modalities = client_modalities
-
-        # use_decoupled_agg=False → 关闭路由白名单，text_proj 参与全量聚合（Group B 文本污染实验）
-        if not self.config.use_decoupled_agg:
-            client_modalities = None
-            self.server._last_grad_conflict_deg = compute_gradient_conflict_from_vectors(
-                [round_client_grad_vectors[cid] for cid in client_ids_sorted],
-                probe_modalities
-            )
 
         self._restore_round_global_before_aggregation(round_global_state)
         print("  [Protocol] Restored round-global state before server aggregation")
 
         aggregated_state = self.server.aggregate_weights(
-            [round_client_updates[cid] for cid in client_ids_sorted],
-            [round_client_reps[cid] for cid in client_ids_sorted],
-            client_modalities=client_modalities  # ★ 新增参数
+            round_global_parameters=round_global_state,
+            client_updates={
+                client_id: round_client_updates[client_id]
+                for client_id in client_ids_sorted
+            },
+            client_modalities=client_modality_map,
+            client_sample_counts=client_sample_counts,
+            routing_mode=self.config.routing_mode,
+        )
+        aggregation_audit = getattr(self.server, "_last_aggregation_audit", None)
+        if not isinstance(aggregation_audit, dict):
+            raise RuntimeError("Server did not produce the required aggregation audit")
+        self.training_history['aggregation_audits'].append(
+            {'round': round_num, **aggregation_audit}
         )
 
         round_group_diagnostics = compute_parameter_group_diagnostics(
@@ -1372,8 +1428,8 @@ class FederatedTrainer:
         self.training_history['gpu_mem_mb'].append(round(_peak_mem_mb, 2))
         _elapsed = time.time() - _round_start_time
         self.training_history['round_time_sec'].append(round(_elapsed, 2))
-        # grad_conflict_deg 由真实 adapter 梯度向量计算后写入 server 缓存
-        # 此处仅读取缓存的最新值（Group A 无多模态时为 None）
+        # grad_conflict_deg is computed from real adapter gradients and is None
+        # when there is no image-only/multimodal client pair.
         _conflict = getattr(self.server, '_last_grad_conflict_deg', None)
         self.training_history['grad_conflict_deg'].append(_conflict)
         print(f"  [PaperData] Round {round_num}: LR={self.config.lr * _cosine_factor:.2e}, "
