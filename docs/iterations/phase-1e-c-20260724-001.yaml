@@ -1,0 +1,64 @@
+iteration_id: phase-1e-c-20260724-001
+base_commit: 1626caaafe045531a4e65b289a6be8badcbbe48f
+target_remote: origin
+target_branch: main
+scope:
+  requirement_ids:
+    - 1E-1
+    - 1E-2
+    - 1E-3
+    - 1F
+  files_to_modify:
+    - src/federated_trainer.py
+    - tests/test_federated_aggregation_wiring.py
+  files_to_add:
+    - docs/iterations/phase-1e-c-20260724-001.yaml
+  files_to_delete: []
+  approved_file_limit_exception: user-approved iteration record in addition to the two implementation files
+contracts_affected:
+  - trainer sends only each client's exact optimizer-named upload dictionary to the server
+  - unrestricted routing includes every active client's private-case count for every parameter
+  - restricted routing uses the explicit routing mode and server-side eligible optimizer uploaders
+  - FedAvg sample weight is the private training dataset length, recorded as private_case_count
+data_flow:
+  input:
+    - client_config.private_loader.dataset
+    - trainer.get_active_optimizer_parameter_names()
+    - client upload dictionary
+    - common round-global named-parameter snapshot
+    - federated.routing_mode
+  transformation:
+    - derive one positive private_case_count per enabled client during setup
+    - reject missing uploads and upload keys that differ from the active optimizer scope
+    - pass client-id keyed uploads, modalities, case counts, routing mode, and round-global parameters to the strict server aggregator
+  output:
+    - parameter-only aggregated state
+    - per-round aggregation audit with private-case counts
+side_effects:
+  - legacy Group A/B/C and use_decoupled_agg trainer branches are removed without compatibility behavior
+  - client representation uploads no longer enter parameter aggregation; round-global public proxies remain the representation source
+  - buffer snapshot isolation remains phase 1G work and is not claimed by this batch
+acceptance_tests:
+  - trainer source contains one strict aggregate_weights call with all required keyword arguments
+  - trainer derives weights only from len(private_loader.dataset) and rejects non-positive counts
+  - trainer rejects missing uploads and any upload/optimizer key mismatch rather than falling back to state_dict
+  - run metadata and per-round history retain the private-case unit and aggregation audit
+static_validation:
+  - Python AST parsing for changed source and test definitions
+  - YAML parsing for this iteration record
+  - source-level contract assertions and git diff whitespace check
+  - no local test execution, training, smoke run, model forward, or model backward
+known_followups:
+  - phase 1G must isolate and restore buffers around serial client execution
+  - phase 1H must add full parameter-group effectiveness chains
+  - phase 1I must align diagnostics with strict common-upload conflict rules
+  - phase 1K must capture every required deterministic data and sampler state
+local_prohibited_actions:
+  - training
+  - smoke_run
+  - model_forward
+  - model_backward
+backup_tag: backup/pre-phase-1e-c-20260724-001
+implementation_commit: PENDING
+origin_main_confirmed: PENDING
+status: IN_PROGRESS
