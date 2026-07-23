@@ -132,12 +132,17 @@ class FederatedConfig:
     """训练输出（日志、图表等）保存目录"""
     
     # ==================== 聚合方法 ====================
-    aggregation_method: str = "contrastive_weighted"
-    """
-    联邦聚合方法，可选值：
-    - 'fedavg': 标准联邦平均
-    - 'contrastive_weighted': CREAM对比加权聚合
-    """
+    aggregation_method: Optional[str] = None
+    """逐参数聚合方法；严格实验只接受显式的 fedavg。"""
+
+    routing_mode: Optional[str] = None
+    """逐参数路由模式；必须显式为 unrestricted 或 restricted。"""
+
+    sample_weight_unit: Optional[str] = None
+    """FedAvg 样本权重单位；必须显式为 private_cases。"""
+
+    unoptimized_update_policy: Optional[str] = None
+    """未优化参数的聚合规则；由 routing_mode 唯一确定。"""
     
     global_rep_alpha: float = 0.9
     """全局表示的更新权重（EMA系数）"""
@@ -160,9 +165,6 @@ class FederatedConfig:
     """FedProx 近端约束系数；仅在 baseline_method=fedprox 时生效"""
 
     # ==================== 联邦学习客户端配置 ====================
-    use_decoupled_agg: bool = False
-    """是否使用解耦功能聚合（Decoupled Aggregation）"""
-
     client_init_policy: str = "round_global"
     """客户端每轮初始化策略；严格对照固定为 round_global"""
 
@@ -292,6 +294,29 @@ class FederatedConfig:
         if self.baseline_method != "fedprox" and abs(self.fedprox_mu) > 1e-12:
             raise ValueError(
                 f"baseline_method={self.baseline_method} 时 fedprox_mu 必须为 0，当前值: {self.fedprox_mu}"
+            )
+        if self.aggregation_method != "fedavg":
+            raise ValueError(
+                "aggregation.method must be explicitly set to 'fedavg'"
+            )
+        if self.routing_mode not in {"unrestricted", "restricted"}:
+            raise ValueError(
+                "federated.routing_mode must be 'unrestricted' or 'restricted'"
+            )
+        if self.sample_weight_unit != "private_cases":
+            raise ValueError(
+                "aggregation.sample_weight_unit must be 'private_cases'"
+            )
+        expected_update_policy = (
+            "include_zero"
+            if self.routing_mode == "unrestricted"
+            else "exclude_and_renormalize"
+        )
+        if self.unoptimized_update_policy != expected_update_policy:
+            raise ValueError(
+                "aggregation.unoptimized_update_policy must be "
+                f"'{expected_update_policy}' when routing_mode is "
+                f"'{self.routing_mode}'"
             )
         if self.client_init_policy != "round_global":
             raise ValueError(
@@ -526,10 +551,39 @@ class FederatedConfig:
                 text_supervision['temperature']
             )
 
+        if 'aggregation' not in config_dict:
+            raise ValueError(
+                "config must define an explicit aggregation section"
+            )
+        aggregation = config_dict['aggregation']
+        if not isinstance(aggregation, dict):
+            raise ValueError("aggregation must be a dictionary")
+        required_aggregation_keys = {
+            'method',
+            'sample_weight_unit',
+            'unoptimized_update_policy',
+        }
+        missing_aggregation_keys = required_aggregation_keys.difference(aggregation)
+        if missing_aggregation_keys:
+            raise ValueError(
+                "aggregation config is missing required keys: "
+                f"{sorted(missing_aggregation_keys)}"
+            )
+        flattened['aggregation_method'] = str(aggregation['method']).lower()
+        flattened['sample_weight_unit'] = str(
+            aggregation['sample_weight_unit']
+        ).lower()
+        flattened['unoptimized_update_policy'] = str(
+            aggregation['unoptimized_update_policy']
+        ).lower()
+
         # 处理服务器配置
         if 'server' in config_dict:
             server = config_dict['server']
-            flattened['aggregation_method'] = server.get('aggregation_method', 'contrastive_weighted')
+            if 'aggregation_method' in server:
+                raise ValueError(
+                    "server.aggregation_method is superseded by aggregation.method"
+                )
             flattened['global_rep_alpha'] = server.get('global_rep_alpha', 0.9)
             flattened['disable_global_rep_update'] = server.get('disable_global_rep_update', False)
             flattened['strict_aggregation_guard'] = server.get('strict_aggregation_guard', False)
@@ -543,16 +597,27 @@ class FederatedConfig:
             flattened['fedprox_mu'] = baseline.get('mu', 0.0)
 
         # 处理联邦学习配置
-        if 'federated' in config_dict:
-            federated = config_dict['federated']
-            flattened['use_decoupled_agg'] = federated.get('use_decoupled_agg', False)
-            flattened['client_init_policy'] = federated.get(
-                'client_init_policy', 'round_global'
+        if 'federated' not in config_dict:
+            raise ValueError(
+                "config must define federated.routing_mode explicitly"
             )
-            flattened['persist_client_optimizer'] = federated.get(
-                'persist_client_optimizer', False
+        federated = config_dict['federated']
+        if not isinstance(federated, dict):
+            raise ValueError("federated must be a dictionary")
+        if 'use_decoupled_agg' in federated:
+            raise ValueError(
+                "federated.use_decoupled_agg is superseded by federated.routing_mode"
             )
-            flattened['clients'] = federated.get('clients', None)
+        if 'routing_mode' not in federated:
+            raise ValueError("federated config is missing routing_mode")
+        flattened['routing_mode'] = str(federated['routing_mode']).lower()
+        flattened['client_init_policy'] = federated.get(
+            'client_init_policy', 'round_global'
+        )
+        flattened['persist_client_optimizer'] = federated.get(
+            'persist_client_optimizer', False
+        )
+        flattened['clients'] = federated.get('clients', None)
 
         # 处理选项配置
         if 'options' in config_dict:
@@ -612,7 +677,10 @@ class FederatedConfig:
             f"  Model: img_size={self.img_size}, embed_dim={self.embed_dim}, "
             f"num_heads={self.num_heads}\n"
             f"  Device: {self.device}, AMP={self.use_amp}, Mock={self.use_mock}\n"
-            f"  Aggregation: {self.aggregation_method}, lambda_cream={self.lambda_cream}, "
+            f"  Aggregation: {self.aggregation_method}, routing={self.routing_mode}, "
+            f"sample_weight_unit={self.sample_weight_unit}, "
+            f"unoptimized_update_policy={self.unoptimized_update_policy}, "
+            f"lambda_cream={self.lambda_cream}, "
             f"disable_global_rep_update={self.disable_global_rep_update}\n"
             f"  Baseline: {self.baseline_method}, fedprox_mu={self.fedprox_mu}\n"
             f")"

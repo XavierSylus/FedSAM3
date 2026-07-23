@@ -1,0 +1,59 @@
+iteration_id: phase-1f-a-20260724-001
+base_commit: 57d7094b86ec7cfc9f8a14b3ea86530ba86b5842
+target_remote: origin
+target_branch: main
+scope:
+  requirement_ids:
+    - 1F
+    - 1L
+  files_to_modify:
+    - src/config_manager.py
+    - configs/fedsam3_2x2_u_fedavg.yaml
+    - configs/fedsam3_2x2_u_fedprox.yaml
+  files_to_add:
+    - docs/iterations/phase-1f-a-20260724-001.yaml
+  files_to_delete: []
+  approved_file_limit_exception: user-approved iteration record in addition to the three implementation files
+contracts_affected:
+  - routing mode is explicit and limited to unrestricted or restricted
+  - FedAvg sample weights have the only unit private_cases
+  - U includes non-optimizer zero updates and R excludes them before renormalization
+  - aggregation method is explicitly fedavg
+data_flow:
+  input:
+    - federated.routing_mode
+    - aggregation.method
+    - aggregation.sample_weight_unit
+    - aggregation.unoptimized_update_policy
+  transformation:
+    - reject the legacy use_decoupled_agg field
+    - validate routing and zero-update policy as a coupled protocol
+    - flatten the explicit configuration into FederatedConfig fields
+  output:
+    - validated routing_mode, aggregation_method, sample_weight_unit, and unoptimized_update_policy
+side_effects:
+  - legacy YAML files without the explicit aggregation contract fail fast until migrated
+  - direct FederatedConfig construction must supply the explicit aggregation contract
+  - remaining R and ratio YAML files are migrated in the next configuration batch
+acceptance_tests:
+  - U YAML loads only with unrestricted plus include_zero
+  - U FedAvg and U FedProx use private_cases
+  - invalid sample-weight units and routing-policy combinations raise errors
+  - legacy use_decoupled_agg is rejected
+static_validation:
+  - Python AST parsing for the configuration manager
+  - YAML parsing for both migrated U configurations
+  - source-level checks for explicit fields and legacy-field rejection
+  - git diff whitespace check
+  - no local test execution, training, smoke run, model forward, or model backward
+known_followups:
+  - configs/fedsam3_2x2_r_fedavg.yaml, configs/fedsam3_2x2_r_fedprox.yaml, and configs/fedsam3_ratio_2of3_r_fedprox.yaml require the next explicit restricted-routing batch
+  - tests and scripts that construct FederatedConfig without the explicit aggregation contract require phase 1M migration
+  - src/federated_trainer.py requires phase 1E-C migration from use_decoupled_agg to routing_mode
+local_prohibited_actions:
+  - training
+  - smoke_run
+  - model_forward
+  - model_backward
+backup_tag: backup/pre-phase-1f-a-20260724-001
+status: STATIC_VALIDATED
