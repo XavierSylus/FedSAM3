@@ -75,6 +75,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override the training device",
     )
+    parser.add_argument(
+        "--log_dir",
+        type=str,
+        default=None,
+        help="Override the run output directory",
+    )
     return parser
 
 
@@ -105,6 +111,9 @@ def apply_cli_overrides(config: FederatedConfig, args: argparse.Namespace) -> No
     if args.device is not None:
         config.device = args.device
         overrides_applied.append(f"device={args.device}")
+    if args.log_dir is not None:
+        config.log_dir = args.log_dir
+        overrides_applied.append(f"log_dir={args.log_dir}")
 
     if config.log_dir is None:
         config.log_dir = str(Path(config.data_root) / "logs")

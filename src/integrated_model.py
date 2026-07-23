@@ -115,6 +115,7 @@ class AdapterInjector(nn.Module):
         self.adapters: Optional[nn.ModuleList] = None
         self.wrapped_blocks: Optional[nn.ModuleList] = None
         self._rope_patched: bool = False
+        self.output_dim: Optional[int] = None
 
     # ------------------------------------------------------------------
     # 主入口：执行 Adapter 注入
@@ -133,6 +134,7 @@ class AdapterInjector(nn.Module):
         if not use_real_sam3:
             # Mock 模型：创建独立的适配器列表
             embed_dim = embed_dim_hint
+            self.output_dim = embed_dim
             if image_encoder is not None:
                 if hasattr(image_encoder, 'transformer_blocks'):
                     num_blocks = len(image_encoder.transformer_blocks)
@@ -208,6 +210,7 @@ class AdapterInjector(nn.Module):
             if embed_dim is None:
                 embed_dim = 1024
                 logger.warning("Could not infer embed_dim, using default for ViT-H: %d", embed_dim)
+            self.output_dim = embed_dim
 
             # 使用 Wrapper 模式包裹每个 Block
             wrapped_blocks = nn.ModuleList()
@@ -551,8 +554,17 @@ class MultimodalFusionHead(nn.Module):
             nn.Linear(embed_dim, contrastive_dim, bias=False),
             nn.LayerNorm(contrastive_dim)
         )
+        self._text_projection = nn.Linear(text_dim, embed_dim, bias=False)
+        self._fusion_gate = nn.Sequential(
+            nn.Conv2d(embed_dim * 2, embed_dim, kernel_size=1, bias=False),
+            nn.BatchNorm2d(embed_dim),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(embed_dim, embed_dim, kernel_size=1, bias=False),
+            nn.Sigmoid(),
+        )
         nn.init.normal_(self.text_proj[0].weight, mean=0.0, std=0.02)
         nn.init.normal_(self.image_proj[0].weight, mean=0.0, std=0.02)
+        nn.init.normal_(self._text_projection.weight, mean=0.0, std=0.01)
         logger.info(
             "MultimodalFusionHead init: text_proj %d->%d | image_proj %d->%d",
             text_dim, contrastive_dim, embed_dim, contrastive_dim,
@@ -589,25 +601,14 @@ class MultimodalFusionHead(nn.Module):
         B_text, D_text = text_features.shape
         if B_text != B:
             raise ValueError(f"Text batch size ({B_text}) != image batch size ({B})!")
-
-        if not hasattr(self, '_text_projection') or self._text_projection is None:
-            self._text_projection = nn.Linear(D_text, C, bias=False).to(image_spatial.device)
-            nn.init.normal_(self._text_projection.weight, mean=0.0, std=0.01)
-        if self._text_projection.in_features != D_text or self._text_projection.out_features != C:
-            self._text_projection = nn.Linear(D_text, C, bias=False).to(image_spatial.device)
-            nn.init.normal_(self._text_projection.weight, mean=0.0, std=0.01)
+        if D_text != self.text_dim or C != self.embed_dim:
+            raise ValueError(
+                "Fusion input dimensions differ from construction contract: "
+                f"text={D_text}/{self.text_dim}, image={C}/{self.embed_dim}"
+            )
 
         text_aligned = self._text_projection(text_features)
         text_broadcasted = text_aligned.unsqueeze(-1).unsqueeze(-1).expand(B, C, H, W)
-
-        if not hasattr(self, '_fusion_gate') or self._fusion_gate is None:
-            self._fusion_gate = nn.Sequential(
-                nn.Conv2d(C * 2, C, kernel_size=1, bias=False),
-                nn.BatchNorm2d(C),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(C, C, kernel_size=1, bias=False),
-                nn.Sigmoid()
-            ).to(image_spatial.device)
 
         concat_features = torch.cat([image_spatial, text_broadcasted], dim=1)
         gate = self._fusion_gate(concat_features)
@@ -779,8 +780,17 @@ class SAM3MedicalIntegrated(nn.Module):
             self.sam3_model = self.sam3_model.to(orig_dev)
 
         # 4. 多模态投影头（委托给 MultimodalFusionHead）
+        if use_adapter and self.adapter_manager.output_dim is None:
+            raise RuntimeError("Cannot determine SAM3 visual feature dimension")
+        visual_feature_dim = (
+            self.adapter_manager.output_dim
+            if use_adapter
+            else self.embed_dim
+        )
         self.fusion_head = MultimodalFusionHead(
-            embed_dim=self.embed_dim, text_dim=text_dim, contrastive_dim=contrastive_dim
+            embed_dim=visual_feature_dim,
+            text_dim=text_dim,
+            contrastive_dim=contrastive_dim,
         )
 
         # 6. CreamFL 对比学习损失
@@ -792,6 +802,8 @@ class SAM3MedicalIntegrated(nn.Module):
                     'get': lambda self, k, d=None: getattr(self, k, d),
                 })()
             )
+            for parameter in self.contrastive_loss_fn.parameters():
+                parameter.requires_grad_(False)
         else:
             self.contrastive_loss_fn = None
 
@@ -1494,33 +1506,20 @@ class SAM3MedicalIntegrated(nn.Module):
 
         D = features.shape[-1]
         expected_dim = self.fusion_head.image_proj[0].in_features
-        if D == expected_dim:
-            # 维度一致：直接用 image_proj Linear(D → contrastive_dim)
-            projected_features = self.fusion_head.image_proj(features)
-        else:
-            # encoder 输出维度与 image_proj 不一致，用 lazy _enc_proj 直连 encoder_dim → contrastive_dim
-            if not hasattr(self.fusion_head, '_enc_proj') or \
-                    self.fusion_head._enc_proj[0].in_features != D:
-                self.fusion_head._enc_proj = nn.Sequential(
-                    nn.Linear(D, self.contrastive_dim, bias=False),
-                    nn.LayerNorm(self.contrastive_dim),
-                ).to(features.device)
-                nn.init.normal_(self.fusion_head._enc_proj[0].weight, std=0.02)
-                logger.info(
-                    "[extract_features] 创建 _enc_proj: %d → contrastive_dim=%d",
-                    D, self.contrastive_dim,
-                )
-            projected_features = self.fusion_head._enc_proj(features)
-
-        return projected_features   # (B, contrastive_dim) 2D
+        if D != expected_dim:
+            raise RuntimeError(
+                "Image feature dimension differs from construction contract: "
+                f"actual={D}, expected={expected_dim}"
+            )
+        return self.fusion_head.image_proj(features)
 
     def get_trainable_params(self) -> list:
         trainable_params = []
         if self.use_adapter and self.adapter_manager.adapters is not None:
             for adapter in self.adapter_manager.adapters:
                 trainable_params.extend(list(adapter.parameters()))
-        trainable_params.extend(list(self.fusion_head.text_proj.parameters()))
-        trainable_params.extend(list(self.fusion_head.image_proj.parameters()))
+        trainable_params.extend(list(self.fusion_head.parameters()))
+        trainable_params.extend(list(self.text_prompt_encoder.parameters()))
         if hasattr(self, '_output_conv') and self._output_conv is not None:
             trainable_params.extend(list(self._output_conv.parameters()))
         if hasattr(self, 'medical_seg_head') and self.medical_seg_head is not None:

@@ -38,3 +38,4 @@ pyyaml>=6.0
 zstandard
 einops
 pillow
+psutil

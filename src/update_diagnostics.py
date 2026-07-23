@@ -1,6 +1,6 @@
 import math
 from itertools import combinations
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import torch
 
@@ -31,7 +31,12 @@ def _update_stats(
         group = classify_parameter(name)
         stats = accumulators.setdefault(
             group,
-            {"update_sq": 0.0, "reference_sq": 0.0, "numel": 0.0},
+            {
+                "update_sq": 0.0,
+                "reference_sq": 0.0,
+                "numel": 0.0,
+                "parameter_count": 0.0,
+            },
         )
         delta = updated.detach().float().cpu() - reference.detach().float().cpu()
         reference_float = reference.detach().float().cpu()
@@ -40,6 +45,7 @@ def _update_stats(
             torch.sum(reference_float * reference_float).item()
         )
         stats["numel"] += float(delta.numel())
+        stats["parameter_count"] += 1.0
 
     result: Dict[str, Dict[str, float]] = {}
     for group, stats in accumulators.items():
@@ -49,7 +55,9 @@ def _update_stats(
             "update_l2": update_l2,
             "reference_l2": reference_l2,
             "relative_drift": update_l2 / max(reference_l2, _EPS),
+            "update_rms": math.sqrt(stats["update_sq"] / max(stats["numel"], 1.0)),
             "numel": int(stats["numel"]),
+            "parameter_count": int(stats["parameter_count"]),
         }
     return result
 
@@ -81,12 +89,19 @@ def _pair_conflicts(
             group = classify_parameter(name)
             stats = accumulators.setdefault(
                 group,
-                {"dot": 0.0, "norm_a_sq": 0.0, "norm_b_sq": 0.0, "numel": 0.0},
+                {
+                    "dot": 0.0,
+                    "norm_a_sq": 0.0,
+                    "norm_b_sq": 0.0,
+                    "numel": 0.0,
+                    "parameter_count": 0.0,
+                },
             )
             stats["dot"] += float(torch.sum(delta_a * delta_b).item())
             stats["norm_a_sq"] += float(torch.sum(delta_a * delta_a).item())
             stats["norm_b_sq"] += float(torch.sum(delta_b * delta_b).item())
             stats["numel"] += float(delta_a.numel())
+            stats["parameter_count"] += 1.0
 
         for group, stats in sorted(accumulators.items()):
             norm_product = math.sqrt(stats["norm_a_sq"] * stats["norm_b_sq"])
@@ -104,24 +119,40 @@ def _pair_conflicts(
                     "angle_deg": math.degrees(math.acos(cosine)),
                     "is_negative": cosine < 0.0,
                     "shared_numel": int(stats["numel"]),
+                    "shared_parameter_count": int(stats["parameter_count"]),
                 }
             )
     return conflicts
 
 
-def _summarize_conflicts(pairwise_conflicts: list) -> Dict[str, Dict[str, float]]:
+def _summarize_conflicts(
+    pairwise_conflicts: list,
+    observed_groups: set,
+) -> Dict[str, Dict[str, Any]]:
     grouped: Dict[str, list] = {}
     for item in pairwise_conflicts:
         grouped.setdefault(item["parameter_group"], []).append(item)
 
-    summary: Dict[str, Dict[str, float]] = {}
-    for group, items in sorted(grouped.items()):
+    summary: Dict[str, Dict[str, Any]] = {}
+    for group in sorted(observed_groups):
+        items = grouped.get(group, [])
         pair_count = len(items)
         negative_count = sum(1 for item in items if item["is_negative"])
+        if pair_count == 0:
+            summary[group] = {
+                "pair_count": 0,
+                "negative_pair_count": 0,
+                "negative_cosine_ratio": None,
+                "conflict_rate": None,
+                "mean_cosine_similarity": None,
+                "mean_angle_deg": None,
+            }
+            continue
         summary[group] = {
             "pair_count": pair_count,
             "negative_pair_count": negative_count,
             "negative_cosine_ratio": negative_count / pair_count,
+            "conflict_rate": negative_count / pair_count,
             "mean_cosine_similarity": sum(
                 item["cosine_similarity"] for item in items
             )
@@ -146,6 +177,11 @@ def compute_parameter_group_diagnostics(
         client_id: _update_stats(round_global_state, state)
         for client_id, state in sorted(client_updates.items())
     }
+    observed_groups = {
+        group
+        for groups in client_drift.values()
+        for group in groups
+    }
     global_drift = (
         _update_stats(round_global_state, aggregated_state)
         if aggregated_state is not None
@@ -154,6 +190,59 @@ def compute_parameter_group_diagnostics(
     return {
         "client_drift": client_drift,
         "pairwise_conflicts": pairwise_conflicts,
-        "conflict_summary": _summarize_conflicts(pairwise_conflicts),
+        "conflict_summary": _summarize_conflicts(
+            pairwise_conflicts,
+            observed_groups,
+        ),
         "global_drift": global_drift,
     }
+
+
+def flatten_parameter_group_diagnostics(
+    round_num: int,
+    diagnostics: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+
+    for client_id, groups in diagnostics.get("client_drift", {}).items():
+        for parameter_group, metrics in groups.items():
+            rows.append(
+                {
+                    "round": round_num,
+                    "row_type": "client_drift",
+                    "client_id": client_id,
+                    "parameter_group": parameter_group,
+                    **metrics,
+                }
+            )
+
+    for item in diagnostics.get("pairwise_conflicts", []):
+        rows.append(
+            {
+                "round": round_num,
+                "row_type": "pairwise_conflict",
+                **item,
+            }
+        )
+
+    for parameter_group, metrics in diagnostics.get("conflict_summary", {}).items():
+        rows.append(
+            {
+                "round": round_num,
+                "row_type": "conflict_summary",
+                "parameter_group": parameter_group,
+                **metrics,
+            }
+        )
+
+    for parameter_group, metrics in diagnostics.get("global_drift", {}).items():
+        rows.append(
+            {
+                "round": round_num,
+                "row_type": "server_drift",
+                "parameter_group": parameter_group,
+                **metrics,
+            }
+        )
+
+    return rows

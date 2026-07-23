@@ -144,6 +144,8 @@ def test_optimizer_hyperparameters_are_loaded_from_training_config(tmp_path):
                 "  weight_decay: 0.02",
                 "  seg_head_lr: 0.002",
                 "  adapter_lr: 0.0002",
+                "server:",
+                "  proxy_client_id: client_3",
             ]
         ),
         encoding="utf-8",
@@ -154,6 +156,7 @@ def test_optimizer_hyperparameters_are_loaded_from_training_config(tmp_path):
     assert config.weight_decay == pytest.approx(0.02)
     assert config.seg_head_lr == pytest.approx(0.002)
     assert config.adapter_lr == pytest.approx(0.0002)
+    assert config.proxy_client_id == "client_3"
 
 
 def test_round_global_state_is_restored_before_aggregation():

@@ -19,13 +19,14 @@ tests/test_aggregation_routing.py
 import sys
 import torch
 import copy
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.model import SAM3_Medical, DEVICE
 from src.parameter_groups import (
-    COMPAT_FALLBACK,
+    FUSION_PARAMS,
     IMAGE_PARAMS,
     TEXT_ADAPTER,
     TEXT_PARAMS,
@@ -67,8 +68,11 @@ def test_parameter_group_classifier_matches_router_contract():
     assert classify_parameter("text_adapter.down.weight") == TEXT_ADAPTER
     assert classify_parameter("adapters.0.down.weight") == VISION_ADAPTER
     assert classify_parameter("fusion_head.text_proj.weight") == TEXT_PARAMS
+    assert classify_parameter("fusion_head._text_projection.weight") == FUSION_PARAMS
+    assert classify_parameter("fusion_head._fusion_gate.0.weight") == FUSION_PARAMS
     assert classify_parameter("medical_seg_head.weight") == IMAGE_PARAMS
-    assert classify_parameter("unknown_module.weight") == COMPAT_FALLBACK
+    with pytest.raises(ValueError, match="Unclassified"):
+        classify_parameter("unknown_module.weight")
 
 
 # ============================================================================
@@ -276,6 +280,10 @@ class TestADARouterV2:
         assert 'text_only' in participants
         print(f"  ✓ 优先级保证：text_adapter → TEXT_ADAPTER 池 ({participants})")
 
+    def test_fusion_parameters_only_accept_multimodal_client(self):
+        participants = self._route("fusion_head._fusion_gate.0.weight")
+        assert participants == {"multimodal"}
+
     # ─────────────────────────────────────────────────────────────────────────
     # 测试 7：安全守卫——无合格客户端返回空列表
     # ─────────────────────────────────────────────────────────────────────────
@@ -307,7 +315,7 @@ class TestADARouterV2:
     # ─────────────────────────────────────────────────────────────────────────
 
     def test_no_modality_info_returns_all_uploaders(self):
-        """无模态信息时路由器应返回所有实际上传者（向后兼容模式）。"""
+        """Unrestricted routing returns all uploaders after parameter classification."""
         dicts = [
             _build_dummy_state(['image_encoder.weight']),
             _build_dummy_state(['image_encoder.weight']),
@@ -322,7 +330,21 @@ class TestADARouterV2:
         assert set(indices) == {0, 1}, (
             f"[FAIL] 无模态信息时应返回 {{0, 1}}，实际: {indices}"
         )
-        print(f"  ✓ 无模态信息兼容模式：返回所有上传者 {indices}")
+        print(f"  ✓ unrestricted routing：返回所有上传者 {indices}")
+
+    def test_unclassified_parameter_fails_in_unrestricted_routing(self):
+        dicts = [
+            _build_dummy_state(["unknown_module.weight"]),
+            None,
+            None,
+        ]
+        with pytest.raises(ValueError, match="Unclassified"):
+            _router(
+                self.global_model,
+                "unknown_module.weight",
+                dicts,
+                modalities=None,
+            )
 
 
 # ============================================================================
