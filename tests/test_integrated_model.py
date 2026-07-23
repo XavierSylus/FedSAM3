@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.federated_trainer import compute_gradient_conflict_from_vectors
 from src.client import BaseClientTrainer
-from src.integrated_model import SAM3MedicalIntegrated
+from src.integrated_model import FederatedOutput, SAM3MedicalIntegrated
 
 
 class TestTextFusionImpact:
@@ -25,7 +25,7 @@ class TestTextFusionImpact:
         """模型配置"""
         return {
             'img_size': 256,  # 使用较小尺寸加速测试
-            'num_classes': 1,
+            'num_classes': 3,
             'adapter_dim': 64,
             'use_sam3': False,  # 使用 Mock 模式加速测试
             'freeze_encoder': False,  # 测试时不冻结以便梯度检查
@@ -104,7 +104,7 @@ class TestTextFusionImpact:
         """Encoder freeze must not freeze injected adapters."""
         model = SAM3MedicalIntegrated(
             img_size=64,
-            num_classes=1,
+            num_classes=3,
             adapter_dim=32,
             use_sam3=False,
             freeze_encoder=True,
@@ -127,6 +127,53 @@ class TestTextFusionImpact:
         trainable_param_ids = {id(p) for p in model.get_trainable_params()}
         assert any(id(p) in trainable_param_ids for p in adapter_params), \
             "Trainable parameter list must include adapter parameters"
+
+    def test_requires_standard_brats_output_channels(self):
+        with pytest.raises(ValueError, match=r"\[WT, TC, ET\].*3"):
+            SAM3MedicalIntegrated(
+                img_size=16,
+                num_classes=1,
+                use_sam3=False,
+                freeze_encoder=False,
+                use_adapter=False,
+                embed_dim=64,
+            )
+
+    def test_forward_preserves_raw_logits_and_their_gradients(self):
+        model = SAM3MedicalIntegrated(
+            img_size=16,
+            num_classes=3,
+            use_sam3=False,
+            freeze_encoder=False,
+            use_adapter=False,
+            embed_dim=64,
+        )
+        model.eval()
+        with torch.no_grad():
+            model.medical_seg_head.weight.copy_(
+                torch.eye(3).unsqueeze(-1).unsqueeze(-1)
+            )
+            model.medical_seg_head.bias.zero_()
+
+        raw_logits = torch.stack(
+            (
+                torch.full((16, 16), -25.0),
+                torch.zeros(16, 16),
+                torch.full((16, 16), 25.0),
+            ),
+            dim=0,
+        ).unsqueeze(0).requires_grad_()
+        model._forward_mock_sam3 = (
+            lambda images, return_features, text_features, global_text_rep:
+            FederatedOutput(logits=raw_logits)
+        )
+
+        output = model(torch.ones(1, 3, 16, 16))["logits"]
+        output.sum().backward()
+
+        assert torch.equal(output, raw_logits)
+        assert raw_logits.grad is not None
+        assert torch.equal(raw_logits.grad, torch.ones_like(raw_logits))
 
     def test_text_fusion_impact(self, model_config, device):
         """
@@ -257,7 +304,7 @@ if __name__ == "__main__":
     # 手动创建 fixtures
     model_config = {
         'img_size': 256,
-        'num_classes': 1,
+        'num_classes': 3,
         'adapter_dim': 64,
         'use_sam3': False,
         'freeze_encoder': False,

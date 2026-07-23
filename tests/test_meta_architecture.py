@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 
 def build_meta_sam3(
     adapter_dim: int = 64,
-    num_classes: int = 1,
+    num_classes: int = 3,
     embed_dim: int = 1024,
     use_real_sam3: bool = True,
 ) -> nn.Module:
@@ -78,7 +78,7 @@ def build_meta_sam3(
 
     Args:
         adapter_dim: Adapter 的瓶颈维度（默认 64）
-        num_classes: 分割类别数（默认 1）
+        num_classes: BraTS 区域通道数（固定为 3）
         embed_dim: ViT 嵌入维度（SAM3 ViT-H 为 1024）
         use_real_sam3: 是否尝试使用真实 SAM3（False = 使用 Mock 模型）
 
@@ -110,7 +110,7 @@ def build_meta_sam3(
 def build_meta_mock(
     adapter_dim: int = 64,
     embed_dim: int = 768,
-    num_classes: int = 1,
+    num_classes: int = 3,
 ) -> nn.Module:
     """在 Meta Device 上构建 Mock（非真实 SAM3）模型，适用于 CI 环境。"""
     with torch.device('meta'):
@@ -223,7 +223,7 @@ class TestMockArchitectureOnMeta:
         with torch.device('meta'):
             model = SAM3MedicalIntegrated(
                 img_size=256,
-                num_classes=1,
+                num_classes=3,
                 adapter_dim=64,
                 use_sam3=False,
                 freeze_encoder=False,
@@ -485,7 +485,7 @@ class TestStateDictCompatibilityOnMeta:
         """Mock Meta 模型（不依赖 SAM3 checkpoint）"""
         with torch.device('meta'):
             return SAM3MedicalIntegrated(
-                img_size=256, num_classes=1, adapter_dim=64,
+                img_size=256, num_classes=3, adapter_dim=64,
                 use_sam3=False, freeze_encoder=False, use_adapter=True,
                 device='meta', embed_dim=768,
             )
@@ -560,7 +560,7 @@ def smoke_test_meta_injector():
     print("\n[2/4] Meta Mock 模型构建...")
     with torch.device('meta'):
         mock_model = SAM3MedicalIntegrated(
-            img_size=256, num_classes=1, adapter_dim=64,
+            img_size=256, num_classes=3, adapter_dim=64,
             use_sam3=False, freeze_encoder=False, use_adapter=False,
             device='meta', embed_dim=768,
         )
@@ -591,7 +591,7 @@ def smoke_test_meta_injector():
     print("\n[4/4] State-dict 键名兼容性验证...")
     with torch.device('meta'):
         model_with_adapter = SAM3MedicalIntegrated(
-            img_size=256, num_classes=1, adapter_dim=64,
+            img_size=256, num_classes=3, adapter_dim=64,
             use_sam3=False, freeze_encoder=False, use_adapter=True,
             device='meta', embed_dim=768,
         )

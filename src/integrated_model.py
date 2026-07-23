@@ -19,6 +19,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, Optional, Dict, Any
 
+from data_processing.brats_region_contract import REGION_NAMES
+
 logger = logging.getLogger(__name__)
 
 
@@ -689,7 +691,7 @@ class SAM3MedicalIntegrated(nn.Module):
     def __init__(
         self,
         img_size: int = 1024,
-        num_classes: int = 1,
+        num_classes: int = 3,
         adapter_dim: int = 64,
         use_sam3: bool = True,
         freeze_encoder: bool = True,
@@ -703,6 +705,11 @@ class SAM3MedicalIntegrated(nn.Module):
         contrastive_dim: int = 1024,
     ):
         super(SAM3MedicalIntegrated, self).__init__()
+        if num_classes != len(REGION_NAMES):
+            raise ValueError(
+                "BraTS segmentation output must use channels [WT, TC, ET] "
+                f"with num_classes=3, got num_classes={num_classes}"
+            )
         self.img_size = img_size
         self.num_classes = num_classes
         self.device_str = device
@@ -851,7 +858,7 @@ class SAM3MedicalIntegrated(nn.Module):
 
         # 11. 终极修复：1x1 门面映射层 + 绝对零度隔离 (Zero-Init)
         # ──────────────────────────────────────────────────────────────
-        # 链路：SAM3 raw output → _apply_output_conv → medical_seg_head → clamp → Logits
+        # 链路：SAM3 raw output → _apply_output_conv → medical_seg_head → raw logits
         #
         # Zero-Init 原理：
         #   weight=0 保证第一轮 forward 时 SAM3 的原始输出被完全屏蔽，
@@ -1027,18 +1034,20 @@ class SAM3MedicalIntegrated(nn.Module):
             result = self._forward_real_sam3(images, return_features, text_features, global_text_rep)
         else:
             result = self._forward_mock_sam3(images, return_features, text_features, global_text_rep)
-        # BraTS mask 形状为 [B, 3, H, W]，分割头必须输出 num_classes（默认3）通道才能对接损失函数。
-        # 旧版 out_channels=1 会导致 pred=[B,1,H,W] vs mask=[B,3,H,W] RuntimeError，已修复。
         result.logits = self.medical_seg_head(result.logits)
-
-        # 空气区域物理硬掩码：脑组织外绝对背景强制镇压到 -20.0，切断假阳性来源
-        with torch.no_grad():
-            brain_mask = (images.abs().sum(dim=1, keepdim=True) > 1e-4).float()
-            brain_mask = F.interpolate(brain_mask, size=result.logits.shape[2:], mode='nearest')
-        result.logits = torch.where(brain_mask > 0.5, result.logits,
-                                    torch.full_like(result.logits, -20.0))
-
-        result.logits = result.logits.clamp(-20.0, 20.0)
+        expected_shape = (
+            images.shape[0],
+            len(REGION_NAMES),
+            images.shape[-2],
+            images.shape[-1],
+        )
+        if tuple(result.logits.shape) != expected_shape:
+            raise RuntimeError(
+                f"BraTS logits must have shape [B, 3, H, W] in channel order "
+                f"[WT, TC, ET]; expected {expected_shape}, got {tuple(result.logits.shape)}"
+            )
+        if not torch.is_floating_point(result.logits):
+            raise TypeError("BraTS logits must use a floating-point dtype")
 
         # Logits 实时监控（训练期前 5 轮自动激活，之后静默）
         current_round = getattr(self, '_monitor_epoch', 0)
@@ -1046,8 +1055,12 @@ class SAM3MedicalIntegrated(nn.Module):
             with torch.no_grad():
                 _lmax = result.logits.max().item()
                 _lmin = result.logits.min().item()
-
-                # 仅在脑组织区域内计算 fg_ratio（排除空气区域干扰）
+                brain_mask = images.abs().sum(dim=1, keepdim=True) > 1e-4
+                brain_mask = F.interpolate(
+                    brain_mask.float(),
+                    size=result.logits.shape[2:],
+                    mode='nearest',
+                ).bool()
                 valid_mask = brain_mask > 0.5
                 if valid_mask.any():
                     valid_logits = result.logits[valid_mask.expand_as(result.logits)]
@@ -1060,16 +1073,15 @@ class SAM3MedicalIntegrated(nn.Module):
                 current_round, _lmax, _lmin, _fg,
             )
             if abs(_lmax) > 20 or abs(_lmin) > 20:
-                logger.error(
-                    "⚠️ [Logits 越界] 绝对值超过 20！max=%.4f min=%.4f "
-                    "→ 请立即检查 lr / 初始化 / 损失权重。",
+                logger.warning(
+                    "[Logits Monitor] magnitude exceeds 20; raw logits remain unclipped. "
+                    "max=%.4f min=%.4f",
                     _lmax, _lmin,
                 )
-            # Zero-Init 期望脑组织内 fg_ratio ≈ 29%（容忍 ±10% 偏差）
             if _fg < 0.20 or _fg > 0.40:
                 logger.warning(
-                    "⚠️ [脑组织内前景比例异常] fg_ratio=%.4f（期望 29%%±10%%）"
-                    " → 请检查 medical_seg_head bias 初始化。",
+                    "[Logits Monitor] foreground probability %.4f is outside "
+                    "the initialization diagnostic range [0.20, 0.40].",
                     _fg,
                 )
 
@@ -1549,7 +1561,7 @@ if __name__ == "__main__":
 
     print("\n[Test 4] SAM3MedicalIntegrated Mock Mode...")
     model = SAM3MedicalIntegrated(
-        img_size=256, num_classes=1, use_sam3=SAM3_AVAILABLE,
+        img_size=256, num_classes=3, use_sam3=SAM3_AVAILABLE,
         freeze_encoder=True, use_adapter=True, device=DEVICE,
     ).to(DEVICE)
     dummy = torch.randn(2, 3, 256, 256).to(DEVICE)
@@ -1576,7 +1588,7 @@ if __name__ == "__main__":
     buf.seek(0)
     loaded_sd = torch.load(buf, map_location='cpu')
     model2 = SAM3MedicalIntegrated(
-        img_size=256, num_classes=1, use_sam3=SAM3_AVAILABLE,
+        img_size=256, num_classes=3, use_sam3=SAM3_AVAILABLE,
         freeze_encoder=True, use_adapter=True, device='cpu',
     )
     res = model2.load_state_dict(loaded_sd, strict=False)
