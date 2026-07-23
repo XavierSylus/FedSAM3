@@ -1,0 +1,56 @@
+iteration_id: phase-1f-b-20260724-001
+base_commit: 5629c59a0e664ef6dfcacd71a61f31a614246a83
+target_remote: origin
+target_branch: main
+scope:
+  requirement_ids:
+    - 1F
+    - 1L
+  files_to_modify:
+    - configs/fedsam3_2x2_r_fedavg.yaml
+    - configs/fedsam3_2x2_r_fedprox.yaml
+    - configs/fedsam3_ratio_2of3_r_fedprox.yaml
+  files_to_add:
+    - docs/iterations/phase-1f-b-20260724-001.yaml
+  files_to_delete: []
+  approved_file_limit_exception: user-approved iteration record in addition to the three implementation files
+contracts_affected:
+  - restricted routing is explicit in every R experiment configuration
+  - FedAvg sample weights use private_cases in every R experiment configuration
+  - restricted aggregation excludes unoptimized parameters before renormalization
+  - the ratio experiment retains its fixed enabled client subset
+data_flow:
+  input:
+    - federated.routing_mode
+    - aggregation.method
+    - aggregation.sample_weight_unit
+    - aggregation.unoptimized_update_policy
+  transformation:
+    - replace the legacy use_decoupled_agg switch in every R configuration
+    - move aggregation method ownership from server to aggregation
+  output:
+    - three validated restricted-routing configuration payloads
+side_effects:
+  - all five primary experiment YAML files now require the explicit aggregation parser introduced in phase 1F-A
+  - trainer wiring to routing_mode and private-case counts remains phase 1E-C/1F-C work
+acceptance_tests:
+  - both R main YAML files load with restricted plus exclude_and_renormalize
+  - the 2/3 ratio YAML keeps client_1 disabled and clients_2/_3 enabled
+  - all three R YAML files use fedavg and private_cases
+  - no migrated YAML contains use_decoupled_agg or server.aggregation_method
+static_validation:
+  - YAML parsing for all three migrated configurations
+  - source-level protocol field assertions
+  - git diff whitespace check
+  - no local test execution, training, smoke run, model forward, or model backward
+known_followups:
+  - configs/fedsam3_experiment_manifest.json requires phase 1L migration to the explicit protocol fields
+  - src/federated_trainer.py requires phase 1E-C/1F-C migration from use_decoupled_agg to routing_mode and private-case counts
+  - tests and scripts using legacy configuration fields require phase 1M migration
+local_prohibited_actions:
+  - training
+  - smoke_run
+  - model_forward
+  - model_backward
+backup_tag: backup/pre-phase-1f-b-20260724-001
+status: STATIC_VALIDATED
