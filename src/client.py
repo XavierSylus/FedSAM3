@@ -588,11 +588,6 @@ class BaseClientTrainer(ABC):
                     self._flush_accumulated_grads(optimizer)
                 break
 
-            # 全链路物理阻断：全零 mask batch 直接跳过
-            _priv_mask = private_inputs.get('mask')
-            if _priv_mask is not None and _priv_mask.sum() <= 10:
-                continue
-
             _accum_step += 1
 
             # Step 3: 计算损失（多态调用）
@@ -886,21 +881,14 @@ class BaseClientTrainer(ABC):
         compute_hd95: bool = True,
         verbose: bool = False
     ) -> Dict[str, float]:
-        """
-        验证模型（Volume-level 全局像素累加，符合 BraTS 官方评估规范）
-
-        Dice = 2*global_intersection / (global_pred_sum + global_gt_sum)，整个验证集唯一一次除法。
-        HD95 只在 GT 非空的切片上计算，避免 inf 污染均值。
-        """
+        """Evaluate 2D validation samples under the strict WT/TC/ET contract."""
         model.eval()
         if self.segmentation_thresholds is None:
             raise RuntimeError("segmentation inference thresholds were not configured")
-        wt_threshold = self.segmentation_thresholds[0]
-
-        global_intersection = 0.0
-        global_pred_sum = 0.0
-        global_gt_sum = 0.0
-        hd95_scores: list = []
+        metrics_module = self._get_metrics_module()
+        accumulator = metrics_module.BraTSMetricAccumulator(
+            compute_hd95=compute_hd95
+        )
 
         with torch.no_grad():
             for batch_idx, batch in enumerate(test_loader):
@@ -922,84 +910,60 @@ class BaseClientTrainer(ABC):
                 raw_output = model(images)
 
                 if isinstance(raw_output, tuple) and len(raw_output) == 2:
-                    pred_logits, iou_scores = raw_output
+                    pred_logits = raw_output[0]
                 elif isinstance(raw_output, dict):
                     pred_logits = raw_output.get('logits', list(raw_output.values())[0])
-                    iou_scores = raw_output.get('iou_predictions', None)
                 else:
                     pred_logits = raw_output
-                    iou_scores = None
-
-                if batch_idx == 0:
-                    wt_logits = pred_logits[:, 0:1]
-                    fg_ratio = (
-                        torch.sigmoid(wt_logits) >= wt_threshold
-                    ).float().mean().item()
-                    print(
-                        f"  [Val Diag] WT logits: max={wt_logits.max():.3f} "
-                        f"min={wt_logits.min():.3f} threshold={wt_threshold:.3f} "
-                        f"fg_ratio={fg_ratio:.4f}"
-                    )
 
                 if masks is None:
                     continue
 
                 self.seg_criterion.validate_inputs(pred_logits, masks)
-                pred_binary = (
-                    torch.sigmoid(pred_logits[:, 0:1]) >= wt_threshold
-                ).float()
-                t_binary = masks[:, 0:1]
-                metrics_module = None
+                accumulator.update_from_logits(
+                    pred_logits,
+                    masks,
+                    thresholds=self.segmentation_thresholds,
+                )
 
-                # 全局像素级累加（绝不在 batch 内做除法）
-                global_intersection += (pred_binary * t_binary).sum().item()
-                global_pred_sum += pred_binary.sum().item()
-                global_gt_sum += t_binary.sum().item()
-
-                # HD95：只在 GT 非空的样本上逐张计算
-                if compute_hd95:
-                    for i in range(pred_binary.shape[0]):
-                        if t_binary[i].sum() > 0:
-                            try:
-                                if metrics_module is None:
-                                    metrics_module = self._get_metrics_module()
-                                p_np = pred_binary[i, 0].cpu().numpy().astype(np.bool_)
-                                t_np = t_binary[i, 0].cpu().numpy().astype(np.bool_)
-                                hd = metrics_module.hausdorff_distance_95(p_np, t_np)
-                                if hd != float('inf'):
-                                    hd95_scores.append(hd)
-                            except Exception:
-                                pass
+                if batch_idx == 0:
+                    for channel_index, region in enumerate(("WT", "TC", "ET")):
+                        region_logits = pred_logits[
+                            :,
+                            channel_index:channel_index + 1,
+                        ]
+                        threshold = self.segmentation_thresholds[channel_index]
+                        fg_ratio = (
+                            torch.sigmoid(region_logits) >= threshold
+                        ).float().mean().item()
+                        print(
+                            f"  [Val Diag] {region} logits: "
+                            f"max={region_logits.max():.3f} "
+                            f"min={region_logits.min():.3f} "
+                            f"threshold={threshold:.3f} "
+                            f"fg_ratio={fg_ratio:.4f}"
+                        )
 
                 if verbose and batch_idx % 10 == 0:
-                    self.logger.info(f"Batch {batch_idx}: 累计 intersection={global_intersection:.0f}")
+                    self.logger.info("Validation batch %d accumulated", batch_idx)
 
-        # 全局一次性除法（整个验证集唯一除法点）
-        global_union = global_pred_sum + global_gt_sum
-        dice = (2.0 * global_intersection) / (global_union + 1e-8)
-        iou = global_intersection / (global_union - global_intersection + 1e-8)
-        fp = max(global_pred_sum - global_intersection, 0.0)
-        fn = max(global_gt_sum - global_intersection, 0.0)
-        precision = global_intersection / (global_intersection + fp + 1e-8)
-        recall = global_intersection / (global_intersection + fn + 1e-8)
+        results = accumulator.compute()
         print(
             "  [Val Stat] "
-            f"pred_fg_voxels={int(global_pred_sum)} "
-            f"gt_fg_voxels={int(global_gt_sum)} "
-            f"precision={precision:.4f} recall={recall:.4f}"
+            f"pred_fg_voxels={results['pred_fg_voxels']} "
+            f"gt_fg_voxels={results['gt_fg_voxels']} "
+            f"precision={results['precision']:.4f} "
+            f"recall={results['recall']:.4f}"
         )
-
-        results: Dict[str, float] = {
-            'dice': float(dice),
-            'iou': float(iou),
-            'precision': float(precision),
-            'recall': float(recall),
-            'pred_fg_voxels': float(global_pred_sum),
-            'gt_fg_voxels': float(global_gt_sum),
-        }
-        if compute_hd95:
-            results['hd95'] = float(np.mean(hd95_scores)) if hd95_scores else float('inf')
-
+        for region in ("WT", "TC", "ET"):
+            print(
+                f"  [Val {region}] "
+                f"Dice={results[f'{region}_dice']:.4f} "
+                f"IoU={results[f'{region}_iou']:.4f} "
+                f"both_empty={results[f'{region}_both_empty_count']} "
+                f"empty_fp={results[f'{region}_empty_fp_count']} "
+                f"empty_fn={results[f'{region}_empty_fn_count']}"
+            )
         return results
 
 
