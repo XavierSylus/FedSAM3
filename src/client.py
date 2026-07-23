@@ -27,7 +27,11 @@ else:
     autocast = lambda device_type='cpu', **kwargs: _NoOpAutocast()
 
 from src.model import SAM3_Medical, DEVICE, BATCH_SIZE, LR
-from src.cream_losses import BraTSDiceBCELoss, CreamContrastiveLoss
+from src.cream_losses import (
+    BraTSDiceBCELoss,
+    CreamContrastiveLoss,
+    PrototypeLogisticTextLoss,
+)
 
 
 # ============================================================================
@@ -61,6 +65,7 @@ class BaseClientTrainer(ABC):
         seg_bce_weight: Optional[float] = None,
         seg_dice_smooth: Optional[float] = None,
         segmentation_thresholds: Optional[Tuple[float, float, float]] = None,
+        text_loss_temperature: Optional[float] = None,
     ):
         """
         初始化客户端训练器（共享组件）
@@ -109,6 +114,11 @@ class BaseClientTrainer(ABC):
             self.use_amp = False
 
         self.cream_loss_fn = CreamContrastiveLoss(tau=0.07)
+        self.text_loss_fn = (
+            PrototypeLogisticTextLoss(text_loss_temperature)
+            if text_loss_temperature is not None
+            else None
+        )
         segmentation_values = (
             segmentation_loss,
             seg_dice_weight,
@@ -972,21 +982,11 @@ class BaseClientTrainer(ABC):
 # ============================================================================
 class TextOnlyTrainer(BaseClientTrainer):
     """
-    ★ 文本专属训练器（TextOnlyTrainer）
+    文本专属训练器。
 
-    **数据格式**：
-    - Private Batch: (text_feature,)
-    - Public Batch: (text_feature,)
-
-    **训练策略**：
-    - 仅计算文本对比学习损失
-    - 跳过分割任务
-    - 使用防坍塌对比学习（InfoNCE-style）
-
-    **返回值**：
-    - weights: 文本相关参数（text_encoder + text_proj）
-    - image_rep: None
-    - text_rep: 文本表征
+    Private ``text_feature`` is projected by ``fusion_head.text_proj`` and
+    aligned to the detached round-global public multimodal text prototype.
+    This client has no segmentation loss.
     """
 
     def unpack_private_batch(self, batch: Any) -> Dict[str, Optional[torch.Tensor]]:
@@ -1021,75 +1021,35 @@ class TextOnlyTrainer(BaseClientTrainer):
         lambda_cream: float
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         """
-        ★ Task 4 规范化（2026-03-17）：TextOnly 客户端损失计算
-
-        约束（不得在任何情况下更改）：
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        1. use_inter = False（硬编码，绝对禁止改为 True）
-           原因：TextOnly 客户端无视觉特征。L_inter 要求计算
-                 local_image_feat 与 global_text_rep 的相似度，
-                 但 TextOnly 没有 image_feat，此梯度方向完全随机，
-                 是"跨模态梯度毒药"，会破坏文本编码器对齐方向。
-
-        2. total_loss = cream_loss（绝对禁止乘以 lambda_cream）
-           原因：TextOnly 客户端没有分割主任务（seg_loss=0）。
-                 若 total = lambda_cream * cream_loss，
-                 λ=0.02 导致梯度缩水 50 倍，文本表征无法充分更新。
-                 cream_loss 是 TextOnly 唯一的学习信号，必须满权重。
-
-        参数：
-            model         : 当前轮次模型
-            private_inputs: {'text_feat': (B, D_text)}
-            public_inputs : {'text_feat': (B, D_text)}（未使用，保留接口）
-            global_reps   : {'text': (D,), 'image': (D,)}
-            lambda_cream  : 接口兼容参数，本方法中强制忽略
-        返回：
-            (total_loss, seg_loss, cream_loss, public_rep)
+        Compute ``L_text`` from private text supervision and the fixed
+        round-global text prototype. ``lambda_cream`` is not applied because
+        this client has no segmentation objective.
         """
         text_feat = private_inputs['text_feat']
-        if hasattr(model, 'text_encoder') and model.text_encoder is not None:
-            text_rep = model.text_encoder(text_feat)
-        else:
-            text_rep = text_feat
-
         if not hasattr(model, 'fusion_head'):
             raise AttributeError(
                 "[TextOnlyTrainer.compute_loss] model 缺少 fusion_head 属性！\n"
                 "请确保 SAM3MedicalIntegrated 已正确初始化 MultimodalFusionHead。\n"
                 f"当前 model 类型: {type(model).__name__}"
             )
-        text_rep_proj = model.fusion_head.text_proj(text_rep)
-        global_text_rep = global_reps['text']
-        # 引入极小扰动，防止相同 Prompt 导致 InfoNCE 分母为 0
-        noise = torch.randn_like(text_rep_proj) * 1e-5
-        text_rep_noisy = text_rep_proj + noise
+        if not hasattr(model.fusion_head, 'project_text'):
+            raise AttributeError(
+                "[TextOnlyTrainer.compute_loss] fusion_head 缺少 project_text"
+            )
+        if self.text_loss_fn is None:
+            raise RuntimeError(
+                "text loss contract was not configured for the text-only client"
+            )
+        if not isinstance(text_feat, torch.Tensor) or text_feat.ndim != 2:
+            raise ValueError("private text_feature must have shape [B, D_text]")
 
-        # use_inter=False：TextOnly 无图像特征，L_inter 梯度方向随机是跨模态梯度毒药
-        _USE_INTER = False
-        loss_dict = self.cream_loss_fn.contrastive_loss(
-            local_features=text_rep_noisy,
-            global_features=global_text_rep,
-            use_inter=_USE_INTER,
-            use_intra=True
-        )
-        cream_loss = loss_dict.get('intra_loss', torch.tensor(0.0, device=self.device))
-        if not isinstance(cream_loss, torch.Tensor):
-            cream_loss = torch.tensor(float(cream_loss), device=self.device)
+        projected_text = model.fusion_head.project_text(text_feat)
+        global_text_rep = global_reps['text'].detach()
+        text_loss = self.text_loss_fn(projected_text, global_text_rep)
+        seg_loss = projected_text.new_zeros(())
+        normalized_text = F.normalize(projected_text, p=2, dim=1)
 
-        # 分割损失 = 0（无图像，无需计算）
-        seg_loss = torch.tensor(0.0, device=self.device)
-
-        # ══════════════════════════════════════════════════════════════
-        # ★ Task 4 约束2：total_loss = cream_loss（绝对禁止乘以 lambda_cream）
-        # TextOnly 无分割主任务，cream_loss 是唯一学习信号，必须满权重反传。
-        # lambda_cream（通常 0.02）会导致梯度缩水 50 倍，文本表征无法更新。
-        # ══════════════════════════════════════════════════════════════
-        total_loss = cream_loss  # ← 不乘 lambda_cream，永远如此
-
-        # 收集文本表征（用于服务器端全局表征 EMA 更新）
-        public_rep = text_rep.mean(dim=0)  # (D_text,)
-
-        return total_loss, seg_loss, cream_loss, public_rep
+        return text_loss, seg_loss, text_loss, normalized_text
 
     def get_return_values(
         self,
