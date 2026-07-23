@@ -72,7 +72,6 @@ def main() -> int:
     model_config = config.get("model", {})
     federated_config = config.get("federated", {})
     server_config = config.get("server", {})
-    training_config = config.get("training", {})
 
     checkpoint = PROJECT_ROOT / model_config.get(
         "sam3_checkpoint",
@@ -107,7 +106,7 @@ def main() -> int:
         f"Proxy client must be multimodal: {proxy_client_id}",
     )
 
-    seed = training_config.get("seed")
+    seed = config.get("seed")
     _require(isinstance(seed, int) and seed >= 0, "training.seed must be a non-negative integer")
 
     git_commit = _git_output("rev-parse", "HEAD")
