@@ -2,10 +2,6 @@ seed: 3407
 data_root: data/federated_split
 federated:
   clients:
-  - client_id: client_1
-    modality: text_only
-    data_source: data/federated_split/client1_text_only/dataset.json
-    enabled: true
   - client_id: client_2
     modality: image_only
     data_source: data/federated_split/client2_image_only/dataset.json
@@ -48,8 +44,8 @@ server:
   proxy_client_id: client_3
   strict_aggregation_guard: true
 baseline:
-  method: fedprox
-  mu: 0.01
+  method: none
+  mu: 0.0
 options:
   use_amp: true
   use_dummy: false
@@ -57,8 +53,8 @@ options:
   verbose_sanity_check: false
 logging:
   log_type: tensorboard
-  log_dir: logs/icassp_ratio/2of3_r_fedprox
-  experiment_name: ICASSP_Ratio_2of3_R_FedProx
+  log_dir: logs/fedsam3_2x2/r_fedavg
+  experiment_name: FedSAM3_2x2_R_FedAvg
   wandb_project: FedSAM3-Cream
   wandb_entity: null
   log_interval: 1

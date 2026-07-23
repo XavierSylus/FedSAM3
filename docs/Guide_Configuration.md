@@ -166,7 +166,7 @@ options:
   use_amp: false
 ```
 
-## 🎓 CVPR 投稿建议
+## 实验执行建议
 
 1. **运行两组实验**: 确保 baseline 和 proposed method 都完成
 2. **记录关键指标**: Dice, HD95, Sensitivity, Specificity

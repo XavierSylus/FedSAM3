@@ -44,8 +44,8 @@ server:
   proxy_client_id: client_3
   strict_aggregation_guard: true
 baseline:
-  method: fedprox
-  mu: 0.01
+  method: none
+  mu: 0.0
 options:
   use_amp: true
   use_dummy: false
@@ -53,8 +53,8 @@ options:
   verbose_sanity_check: false
 logging:
   log_type: tensorboard
-  log_dir: logs/icassp_2x2/u_fedprox
-  experiment_name: ICASSP_2x2_U_FedProx
+  log_dir: logs/fedsam3_2x2/u_fedavg
+  experiment_name: FedSAM3_2x2_U_FedAvg
   wandb_project: FedSAM3-Cream
   wandb_entity: null
   log_interval: 1

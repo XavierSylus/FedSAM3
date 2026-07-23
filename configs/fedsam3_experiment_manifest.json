@@ -1,5 +1,5 @@
 {
-  "protocol": "ICASSP strict routing x FedProx comparison",
+  "protocol": "strict routing x FedProx comparison",
   "seed": 3407,
   "fixed_controls": {
     "clients": [
@@ -20,27 +20,27 @@
       "cell": "U-FedAvg",
       "restricted_routing": false,
       "fedprox": false,
-      "config": "configs/icassp_2x2_u_fedavg.yaml"
+      "config": "configs/fedsam3_2x2_u_fedavg.yaml"
     },
     {
       "cell": "U-FedProx",
       "restricted_routing": false,
       "fedprox": true,
       "mu": 0.01,
-      "config": "configs/icassp_2x2_u_fedprox.yaml"
+      "config": "configs/fedsam3_2x2_u_fedprox.yaml"
     },
     {
       "cell": "R-FedAvg",
       "restricted_routing": true,
       "fedprox": false,
-      "config": "configs/icassp_2x2_r_fedavg.yaml"
+      "config": "configs/fedsam3_2x2_r_fedavg.yaml"
     },
     {
       "cell": "R-FedProx",
       "restricted_routing": true,
       "fedprox": true,
       "mu": 0.01,
-      "config": "configs/icassp_2x2_r_fedprox.yaml"
+      "config": "configs/fedsam3_2x2_r_fedprox.yaml"
     }
   ],
   "missing_modality_settings": [
@@ -59,7 +59,7 @@
         "image_only",
         "multimodal"
       ],
-      "config": "configs/icassp_ratio_2of3_r_fedprox.yaml"
+      "config": "configs/fedsam3_ratio_2of3_r_fedprox.yaml"
     }
   ],
   "diagnostic_groups": [

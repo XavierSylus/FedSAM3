@@ -1,13 +1,13 @@
-# FedSAM3-Hetero 核心实现留底说明
+# FedSAM3-Hetero 核心实现审查说明
 
 日期：2026-04-30  
 代码提交：`2967082b986d533034c3859a248a2ab702fa087d`
 
-本文件用于论文投稿前的项目留底，说明当前代码中 restricted routing 与 FedProx baseline 的实际实现位置。压缩包中不应只包含配置、日志和绘图脚本，还应包含核心聚合实现、客户端上传边界、训练调度入口、配置和测试文件。
+本文件说明 restricted routing 与 FedProx baseline 的实际实现位置及其完整技术链路。审查范围包括核心聚合实现、客户端上传边界、训练调度入口、配置和测试文件。
 
-## 1. 建议提交给导师的文件清单
+## 1. 核心实现文件清单
 
-建议压缩包命名为：
+建议审查归档命名为：
 
 ```text
 FedSAM3_core_implementation_evidence_20260430.zip
@@ -570,9 +570,9 @@ baseline_method = fedprox
 fedprox_mu = 0.01
 ```
 
-## 8. 给导师核查时的最短追踪路径
+## 8. 最短追踪路径
 
-如果导师只想快速核查，可以按下面路径检查：
+快速核查可以按下面路径进行：
 
 1. 看 `configs/exp_group_c.yaml`：
    - `use_decoupled_agg: true`
@@ -629,4 +629,4 @@ FedProx baseline 的实际实现路径为：`configs/exp_baseline_d_fedprox.yaml
 0.5 * mu * sum(||w_local - w_global||^2)
 ```
 
-因此，压缩包中应保留上述源码、配置、测试和本说明文件，作为后续抽查时的核心实现证据。
+因此，技术审查材料应保留上述源码、配置、测试和本说明文件，确保核心实现可以复核。
