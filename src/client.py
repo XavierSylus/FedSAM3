@@ -27,7 +27,7 @@ else:
     autocast = lambda device_type='cpu', **kwargs: _NoOpAutocast()
 
 from src.model import SAM3_Medical, DEVICE, BATCH_SIZE, LR
-from src.cream_losses import CreamContrastiveLoss, RobustMedicalLoss
+from src.cream_losses import BraTSDiceBCELoss, CreamContrastiveLoss
 
 
 # ============================================================================
@@ -55,7 +55,12 @@ class BaseClientTrainer(ABC):
         enable_text_assist_in_seg: bool = True,
         allow_text_param_upload: bool = False,
         baseline_method: str = "none",
-        fedprox_mu: float = 0.0
+        fedprox_mu: float = 0.0,
+        segmentation_loss: Optional[str] = None,
+        seg_dice_weight: Optional[float] = None,
+        seg_bce_weight: Optional[float] = None,
+        seg_dice_smooth: Optional[float] = None,
+        segmentation_thresholds: Optional[Tuple[float, float, float]] = None,
     ):
         """
         初始化客户端训练器（共享组件）
@@ -104,16 +109,43 @@ class BaseClientTrainer(ABC):
             self.use_amp = False
 
         self.cream_loss_fn = CreamContrastiveLoss(tau=0.07)
-
-        # Tversky(α=0.3/β=0.7) + Log-Dice 双路联合损失（RobustMedicalLoss v5）：
-        # α=0.3 轻罚假阳性(FP)，β=0.7 重罚假阴性(FN)，对抗 BraTS 漏诊偏差；
-        # min_positive_pixels=100 与 Log-Dice 路径的 active_mask 阈值对齐。
-        self.seg_criterion = RobustMedicalLoss(
-            tversky_alpha=0.3,
-            tversky_beta=0.7,
-            min_positive_pixels=100,
+        segmentation_values = (
+            segmentation_loss,
+            seg_dice_weight,
+            seg_bce_weight,
+            seg_dice_smooth,
+            segmentation_thresholds,
         )
-
+        if all(value is None for value in segmentation_values):
+            self.seg_criterion = None
+            self.segmentation_thresholds = None
+        elif any(value is None for value in segmentation_values):
+            raise ValueError("segmentation loss configuration must be provided as one complete contract")
+        else:
+            if segmentation_loss != "dice_bce":
+                raise ValueError(
+                    f"segmentation_loss must be 'dice_bce', got {segmentation_loss!r}"
+                )
+            self.seg_criterion = BraTSDiceBCELoss(
+                dice_weight=seg_dice_weight,
+                bce_weight=seg_bce_weight,
+                smooth=seg_dice_smooth,
+            )
+            if len(segmentation_thresholds) != 3:
+                raise ValueError(
+                    "segmentation_thresholds must contain [WT, TC, ET]"
+                )
+            ordered_thresholds = tuple(
+                float(value) for value in segmentation_thresholds
+            )
+            if any(
+                not math.isfinite(value) or value <= 0.0 or value >= 1.0
+                for value in ordered_thresholds
+            ):
+                raise ValueError(
+                    "segmentation thresholds must be finite values strictly between 0 and 1"
+                )
+            self.segmentation_thresholds = ordered_thresholds
 
         self.training_stats = {
             'total_loss': 0.0,
@@ -138,6 +170,15 @@ class BaseClientTrainer(ABC):
 
             self._metrics_module = metrics_module
         return self._metrics_module
+
+    def _compute_segmentation_loss(
+        self,
+        logits: torch.Tensor,
+        target: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.seg_criterion is None:
+            raise RuntimeError("segmentation loss contract was not configured for this client")
+        return self.seg_criterion(logits, target)
 
     def _reset_adapter_grad_tracking(self, model: nn.Module) -> None:
         """Track only the trainable adapter parameters for gradient-angle diagnostics."""
@@ -852,6 +893,9 @@ class BaseClientTrainer(ABC):
         HD95 只在 GT 非空的切片上计算，避免 inf 污染均值。
         """
         model.eval()
+        if self.segmentation_thresholds is None:
+            raise RuntimeError("segmentation inference thresholds were not configured")
+        wt_threshold = self.segmentation_thresholds[0]
 
         global_intersection = 0.0
         global_pred_sum = 0.0
@@ -877,24 +921,6 @@ class BaseClientTrainer(ABC):
 
                 raw_output = model(images)
 
-                wt_channel_idx = 1  # channel0=BG, channel1=WT, channel2=ET
-
-                if batch_idx == 0:
-                    _diag_logits = raw_output.get('logits', None) if isinstance(raw_output, dict) else raw_output
-                    if _diag_logits is not None:
-                        # ★ 修复 (2026-03-29): fg_ratio 应反映实际用于 Dice 计算的通道
-                        # 多通道输出时，只计算 WT 通道的前景比例
-                        if _diag_logits.shape[1] > 1:
-                            _diag_wt = _diag_logits[:, wt_channel_idx:wt_channel_idx + 1, :, :]
-                            _fg = (torch.sigmoid(_diag_wt) > 0.5).float().mean().item()
-                            print(
-                                f"  [Val Diag] logits ch{wt_channel_idx}: max={_diag_wt.max():.3f} "
-                                f"min={_diag_wt.min():.3f} fg_ratio={_fg:.4f} (channel {wt_channel_idx}/WT only)"
-                            )
-                        else:
-                            _fg = (torch.sigmoid(_diag_logits) > 0.5).float().mean().item()
-                            print(f"  [Val Diag] logits max={_diag_logits.max():.3f} min={_diag_logits.min():.3f} fg_ratio={_fg:.4f}")
-
                 if isinstance(raw_output, tuple) and len(raw_output) == 2:
                     pred_logits, iou_scores = raw_output
                 elif isinstance(raw_output, dict):
@@ -904,31 +930,26 @@ class BaseClientTrainer(ABC):
                     pred_logits = raw_output
                     iou_scores = None
 
+                if batch_idx == 0:
+                    wt_logits = pred_logits[:, 0:1]
+                    fg_ratio = (
+                        torch.sigmoid(wt_logits) >= wt_threshold
+                    ).float().mean().item()
+                    print(
+                        f"  [Val Diag] WT logits: max={wt_logits.max():.3f} "
+                        f"min={wt_logits.min():.3f} threshold={wt_threshold:.3f} "
+                        f"fg_ratio={fg_ratio:.4f}"
+                    )
+
                 if masks is None:
                     continue
 
-                if masks.shape[2:] != pred_logits.shape[2:]:
-                    masks = F.interpolate(masks, size=pred_logits.shape[2:], mode='bilinear', align_corners=False)
-
-                pred_probs = torch.sigmoid(pred_logits)
+                self.seg_criterion.validate_inputs(pred_logits, masks)
+                pred_binary = (
+                    torch.sigmoid(pred_logits[:, 0:1]) >= wt_threshold
+                ).float()
+                t_binary = masks[:, 0:1]
                 metrics_module = None
-                if pred_probs.shape[1] > 1:
-                    # 多通道输出时，明确使用 WT 通道，避免 max(dim=1) 选错通道导致评估失真
-                    # 当前 BraTS 编码定义：ch0=BG, ch1=WT, ch2=ET
-                    pred_selected = pred_probs[:, wt_channel_idx:wt_channel_idx + 1, :, :]
-                elif iou_scores is not None and pred_probs.shape[1] == iou_scores.shape[1]:
-                    metrics_module = self._get_metrics_module()
-                    pred_selected = metrics_module.select_best_mask(pred_probs, iou_scores)
-                else:
-                    pred_selected = pred_probs
-                pred_binary = (pred_selected > 0.5).float()  # (B, 1, H, W)
-
-                # GT 对齐 WT 通道（避免把 BG 通道当成前景）
-                t_float = masks.float()
-                if t_float.shape[1] > wt_channel_idx:
-                    t_binary = (t_float[:, wt_channel_idx:wt_channel_idx + 1, :, :] > 0.5).float()
-                else:
-                    t_binary = (t_float > 0.5).float()
 
                 # 全局像素级累加（绝不在 batch 内做除法）
                 global_intersection += (pred_binary * t_binary).sum().item()
@@ -1212,7 +1233,7 @@ class ImageOnlyTrainer(BaseClientTrainer):
         lambda_cream: float
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         """
-        分割损失（RobustMedicalLoss）+ 跨模态表征蒸馏（当前 Group A：cream_loss=0）。
+        分割损失（Dice+BCE）+ 跨模态表征蒸馏（当前 Group A：cream_loss=0）。
 
         Args:
             model: 当前轮次模型
@@ -1232,7 +1253,7 @@ class ImageOnlyTrainer(BaseClientTrainer):
         # global_image_rep 在本方法不参与损失计算（L_intra 已关闭，避免图像 EMA 自环偏置）
 
         # ══════════════════════════════════════════════════════════════════
-        # Step 1：主任务分割损失（RobustMedicalLoss = Log-Dice + Focal + active_mask）
+        # Step 1：主任务分割损失（配置化 soft-Dice + BCEWithLogits）
         # ══════════════════════════════════════════════════════════════════
         if mask is not None:
             # ★ Group A 实验：无 text_only 客户端，global_text_rep 为随机噪声，
@@ -1246,11 +1267,7 @@ class ImageOnlyTrainer(BaseClientTrainer):
             else:
                 pred = raw_output
 
-            # 空间尺寸对齐（nearest 保持离散标签语义）
-            if mask.shape[2:] != pred.shape[2:]:
-                mask = F.interpolate(mask, size=pred.shape[2:], mode='nearest')
-
-            seg_loss = self.seg_criterion(pred, mask)
+            seg_loss = self._compute_segmentation_loss(pred, mask)
         else:
             seg_loss = torch.tensor(0.0, device=self.device)
 
@@ -1426,11 +1443,7 @@ class MultimodalTrainer(BaseClientTrainer):
             if isinstance(pred, dict):
                 pred = pred.get('logits', list(pred.values())[0])
 
-            # 尺寸对齐
-            if mask.shape[2:] != pred.shape[2:]:
-                mask = F.interpolate(mask, size=pred.shape[2:], mode='nearest')
-
-            seg_loss = self.seg_criterion(pred, mask)
+            seg_loss = self._compute_segmentation_loss(pred, mask)
         else:
             seg_loss = torch.tensor(0.0, device=self.device)
 
