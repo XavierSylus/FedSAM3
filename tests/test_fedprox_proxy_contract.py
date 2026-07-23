@@ -7,6 +7,8 @@ CLIENT_PATH = PROJECT_ROOT / "src" / "client.py"
 TRAINER_PATH = PROJECT_ROOT / "src" / "federated_trainer.py"
 MODEL_PATH = PROJECT_ROOT / "src" / "integrated_model.py"
 MAIN_PATH = PROJECT_ROOT / "main.py"
+PREFLIGHT_PATH = PROJECT_ROOT / "scripts" / "server_preflight.py"
+LAUNCHER_PATH = PROJECT_ROOT / "run_production_train.sh"
 
 
 def _class_method(path: Path, class_name: str, method_name: str) -> ast.FunctionDef:
@@ -137,3 +139,40 @@ def test_main_supports_isolated_smoke_log_directory():
 
     assert "--log_dir" in ast.unparse(parser_builder)
     assert "config.log_dir = args.log_dir" in ast.unparse(override_function)
+
+
+def test_server_preflight_reads_the_top_level_seed_contract():
+    main_function = next(
+        node
+        for node in ast.parse(PREFLIGHT_PATH.read_text(encoding="utf-8")).body
+        if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+    seed_assignments = [
+        node
+        for node in ast.walk(main_function)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "seed"
+            for target in node.targets
+        )
+    ]
+    assert len(seed_assignments) == 1
+    value = seed_assignments[0].value
+    assert isinstance(value, ast.Call)
+    assert isinstance(value.func, ast.Attribute)
+    assert isinstance(value.func.value, ast.Name)
+    assert value.func.value.id == "config"
+    assert value.func.attr == "get"
+    assert len(value.args) == 1
+    assert isinstance(value.args[0], ast.Constant)
+    assert value.args[0].value == "seed"
+    assert "training_config" not in {
+        node.id for node in ast.walk(main_function) if isinstance(node, ast.Name)
+    }
+
+
+def test_launcher_removes_invalid_openmp_thread_value():
+    source = LAUNCHER_PATH.read_text(encoding="utf-8")
+
+    assert "OMP_NUM_THREADS" in source
+    assert "unset OMP_NUM_THREADS" in source

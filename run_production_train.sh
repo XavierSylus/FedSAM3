@@ -2,6 +2,11 @@
 
 set -euo pipefail
 
+if [[ -n "${OMP_NUM_THREADS-}" && ! "$OMP_NUM_THREADS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Ignoring invalid OMP_NUM_THREADS value: ${OMP_NUM_THREADS}"
+    unset OMP_NUM_THREADS
+fi
+
 if [[ $# -lt 1 || $# -gt 2 ]]; then
     echo "Usage: ./run_production_train.sh <config.yaml> [--smoke]"
     exit 2
