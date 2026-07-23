@@ -1,0 +1,65 @@
+iteration_id: phase-1e-b-20260724-001
+base_commit: 489e86d3f7d52d8219e8e4d452ce5d3d4cb277f3
+target_remote: origin
+target_branch: main
+scope:
+  requirement_ids:
+    - 1E-2
+    - 1E-3
+  files_to_modify:
+    - src/server.py
+    - src/parameter_groups.py
+  files_to_add:
+    - tests/test_parameterwise_aggregation.py
+    - docs/iterations/phase-1e-b-20260724-001.yaml
+  files_to_delete: []
+  approved_file_limit_exception: user-approved iteration record in addition to the three implementation files
+contracts_affected:
+  - unrestricted U aggregation includes every active client in each denominator
+  - restricted R aggregation includes only optimizer uploads allowed by parameter-group modality routing
+  - all active client weights are positive private-case counts supplied explicitly to the aggregation API
+  - every trainable named parameter is uniquely classified before aggregation
+  - empty restricted eligibility preserves the round-global parameter and is audited
+data_flow:
+  input:
+    - round-global named parameter snapshot
+    - per-client optimizer-scoped upload dictionaries
+    - client IDs, modalities, and positive sample counts
+    - explicit routing mode
+  transformation:
+    - validate client identity alignment, sample counts, upload names, shapes, dtypes, and parameter classification
+    - derive deltas relative to the round-global parameter
+    - aggregate U with missing uploads as zero deltas and all active sample counts in the denominator
+    - aggregate R with only uploaded and modality-eligible clients, then renormalize their sample counts
+  output:
+    - parameter-only aggregated state
+    - per-parameter routing, zero-update, and normalized-weight audit
+side_effects:
+  - legacy aggregate_weights callers without explicit routing and sample-count inputs fail fast until phase 1E-C wires the federated trainer
+  - parameter model aggregation no longer uses representation similarity or contrastive weights
+  - buffer distribution and ownership remain a separate phase 1G requirement
+acceptance_tests:
+  - U with client sample counts 1:2:3 dilutes a single uploader by all active clients
+  - R renormalizes only the eligible optimizer uploaders and differs from U
+  - text-only cannot participate in visual R aggregation
+  - image-only cannot participate in text R aggregation
+  - fusion parameters accept only multimodal R updates
+  - empty R eligibility keeps the round-global value and records an audit event
+  - unclassified trainable parameters and invalid client/sample alignment fail fast
+static_validation:
+  - Python AST parsing for modified and added Python files
+  - source-level checks for U and R formulas and explicit fail-fast branches
+  - YAML parsing and required iteration-record fields
+  - git diff whitespace check
+  - no local test execution, training, smoke run, model forward, or model backward
+known_followups:
+  - src/federated_trainer.py and legacy orchestration callers require phase 1E-C migration to the strict aggregate_weights API
+  - tests/test_server_aggregation_guard.py encodes full state-dictionary fill behavior and requires phase 1G/1M migration
+  - tests/smoke_test.py invokes the superseded aggregation API and must remain server-only until phase 1M migration
+local_prohibited_actions:
+  - training
+  - smoke_run
+  - model_forward
+  - model_backward
+backup_tag: backup/pre-phase-1e-b-20260724-001
+status: STATIC_VALIDATED

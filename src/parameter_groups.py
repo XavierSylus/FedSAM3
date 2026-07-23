@@ -1,4 +1,4 @@
-from typing import FrozenSet
+from typing import FrozenSet, Iterable
 
 
 TEXT_ADAPTER = "TEXT_ADAPTER"
@@ -36,6 +36,13 @@ IMAGE_PARAM_KEYWORDS = (
 _TEXT_MODALITIES: FrozenSet[str] = frozenset({"text_only", "multimodal"})
 _VISION_MODALITIES: FrozenSet[str] = frozenset({"image_only", "multimodal"})
 _FUSION_MODALITIES: FrozenSet[str] = frozenset({"multimodal"})
+PARAMETER_GROUPS: FrozenSet[str] = frozenset({
+    TEXT_ADAPTER,
+    TEXT_PARAMS,
+    VISION_ADAPTER,
+    IMAGE_PARAMS,
+    FUSION_PARAMS,
+})
 
 
 def classify_parameter(param_name: str) -> str:
@@ -64,6 +71,25 @@ def allowed_modalities(param_group: str) -> FrozenSet[str]:
     if param_group == FUSION_PARAMS:
         return _FUSION_MODALITIES
     raise ValueError(f"Unknown parameter group: {param_group}")
+
+
+def classify_trainable_parameters(
+    parameter_names: Iterable[str],
+) -> dict[str, str]:
+    """Classify every trainable aggregation key exactly once."""
+    classifications: dict[str, str] = {}
+    for parameter_name in parameter_names:
+        if parameter_name in classifications:
+            raise ValueError(
+                f"Duplicate trainable aggregation key: {parameter_name}"
+            )
+        parameter_group = classify_parameter(parameter_name)
+        if parameter_group not in PARAMETER_GROUPS:
+            raise ValueError(
+                f"Unknown parameter group for trainable key: {parameter_name}"
+            )
+        classifications[parameter_name] = parameter_group
+    return classifications
 
 
 def is_vision_parameter(param_name: str) -> bool:
