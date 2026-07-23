@@ -6,10 +6,13 @@ FedSAM3-Cream 联邦学习配置管理器
 """
 
 import argparse
+import math
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional, Dict, Any, Set
+from typing import Optional, Dict, Any, Set, Tuple
 import torch
+
+from data_processing.brats_region_contract import REGION_NAMES
 
 
 @dataclass
@@ -86,8 +89,15 @@ class FederatedConfig:
     num_heads: Optional[int] = None
     """Transformer注意力头的数量（None表示自动计算）"""
 
-    num_classes: int = 1
-    """分割输出通道数（Group A 纯视觉基线=1；BraTS 3区域全集=3）"""
+    num_classes: int = 3
+    """BraTS 重叠区域输出通道数，固定顺序为 [WT, TC, ET]"""
+
+    segmentation_loss: Optional[str] = None
+    seg_dice_weight: Optional[float] = None
+    seg_bce_weight: Optional[float] = None
+    seg_dice_smooth: Optional[float] = None
+    segmentation_thresholds: Optional[Tuple[float, float, float]] = None
+    """分割训练和推理契约；目标实验必须由 YAML 显式提供"""
 
     text_dim: int = 768
     """文本编码器输出维度（BERT-base=768），传给 MultimodalFusionHead.text_proj"""
@@ -412,8 +422,60 @@ class FederatedConfig:
             flattened['img_size'] = model.get('img_size', 256)
             flattened['embed_dim'] = model.get('embed_dim', 768)
             flattened['num_heads'] = model.get('num_heads')
-            flattened['num_classes'] = model.get('num_classes', 1)
+            flattened['num_classes'] = model.get('num_classes', 3)
             flattened['text_dim']    = model.get('text_dim', 768)
+
+        if 'segmentation' in config_dict:
+            segmentation = config_dict['segmentation']
+            required_keys = {
+                'loss',
+                'dice_weight',
+                'bce_weight',
+                'smooth',
+                'thresholds',
+            }
+            missing_keys = required_keys.difference(segmentation)
+            if missing_keys:
+                raise ValueError(
+                    f"segmentation config is missing required keys: {sorted(missing_keys)}"
+                )
+
+            loss_name = str(segmentation['loss']).lower()
+            if loss_name != 'dice_bce':
+                raise ValueError(
+                    f"segmentation.loss must be 'dice_bce', got {loss_name!r}"
+                )
+
+            numeric_values = {
+                'dice_weight': segmentation['dice_weight'],
+                'bce_weight': segmentation['bce_weight'],
+                'smooth': segmentation['smooth'],
+            }
+            for name, value in numeric_values.items():
+                if isinstance(value, bool) or not math.isfinite(float(value)) or float(value) <= 0.0:
+                    raise ValueError(
+                        f"segmentation.{name} must be a finite value greater than zero"
+                    )
+
+            thresholds = segmentation['thresholds']
+            if not isinstance(thresholds, dict) or set(thresholds) != set(REGION_NAMES):
+                raise ValueError(
+                    f"segmentation.thresholds must define exactly {REGION_NAMES}"
+                )
+            ordered_thresholds = tuple(float(thresholds[name]) for name in REGION_NAMES)
+            if any(
+                not math.isfinite(value) or value <= 0.0 or value >= 1.0
+                for value in ordered_thresholds
+            ):
+                raise ValueError(
+                    "segmentation thresholds must be finite values strictly between 0 and 1"
+                )
+
+            flattened['segmentation_loss'] = loss_name
+            flattened['seg_dice_weight'] = float(numeric_values['dice_weight'])
+            flattened['seg_bce_weight'] = float(numeric_values['bce_weight'])
+            flattened['seg_dice_smooth'] = float(numeric_values['smooth'])
+            flattened['segmentation_thresholds'] = ordered_thresholds
 
         # 处理服务器配置
         if 'server' in config_dict:
