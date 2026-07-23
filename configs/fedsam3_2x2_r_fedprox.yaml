@@ -37,6 +37,15 @@ model:
   decoder_dim: 256
   num_classes: 3
   adapter_skip: 64
+segmentation:
+  loss: dice_bce
+  dice_weight: 1.0
+  bce_weight: 1.0
+  smooth: 1.0
+  thresholds:
+    WT: 0.5
+    TC: 0.5
+    ET: 0.5
 server:
   aggregation_method: fedavg
   global_rep_alpha: 0.9
