@@ -599,6 +599,7 @@ class FederatedTrainer:
                 allow_text_param_upload=allow_text_param_upload,
                 baseline_method=getattr(self.config, 'baseline_method', 'none'),
                 fedprox_mu=getattr(self.config, 'fedprox_mu', 0.0),
+                text_loss_temperature=self.config.text_loss_temperature,
                 **segmentation_kwargs,
             )
 

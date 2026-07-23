@@ -99,6 +99,10 @@ class FederatedConfig:
     segmentation_thresholds: Optional[Tuple[float, float, float]] = None
     """分割训练和推理契约；目标实验必须由 YAML 显式提供"""
 
+    text_loss_name: Optional[str] = None
+    text_loss_temperature: Optional[float] = None
+    """文本客户端监督契约；启用 text_only 客户端时必须由 YAML 显式提供"""
+
     text_dim: int = 768
     """文本编码器输出维度（BERT-base=768），传给 MultimodalFusionHead.text_proj"""
 
@@ -247,6 +251,25 @@ class FederatedConfig:
             raise ValueError(f"local_epochs 必须大于 0，当前值: {self.local_epochs}")
         if self.lambda_cream < 0:
             raise ValueError(f"lambda_cream 不能为负数，当前值: {self.lambda_cream}")
+        text_loss_values = (self.text_loss_name, self.text_loss_temperature)
+        if any(value is not None for value in text_loss_values):
+            if any(value is None for value in text_loss_values):
+                raise ValueError(
+                    "text supervision loss and temperature must be provided together"
+                )
+            if self.text_loss_name != "prototype_logistic":
+                raise ValueError(
+                    "text_loss_name must be 'prototype_logistic', "
+                    f"got {self.text_loss_name!r}"
+                )
+            if (
+                isinstance(self.text_loss_temperature, bool)
+                or not math.isfinite(float(self.text_loss_temperature))
+                or float(self.text_loss_temperature) <= 0.0
+            ):
+                raise ValueError(
+                    "text_loss_temperature must be finite and greater than zero"
+                )
         if self.img_size <= 0:
             raise ValueError(f"img_size 必须大于 0，当前值: {self.img_size}")
         if self.embed_dim <= 0:
@@ -314,6 +337,16 @@ class FederatedConfig:
 
             if enabled_count == 0:
                 raise ValueError("clients 中至少需要一个 enabled=true 的客户端")
+            has_enabled_text_client = any(
+                bool(client_cfg.get("enabled", True))
+                and str(client_cfg.get("modality", "")).strip() == "text_only"
+                for client_cfg in self.clients
+            )
+            if has_enabled_text_client and self.text_loss_name is None:
+                raise ValueError(
+                    "enabled text_only clients require an explicit "
+                    "text_supervision contract"
+                )
         
         # 确保 CUDA 可用时才使用
         if self.device == "cuda" and not torch.cuda.is_available():
@@ -476,6 +509,22 @@ class FederatedConfig:
             flattened['seg_bce_weight'] = float(numeric_values['bce_weight'])
             flattened['seg_dice_smooth'] = float(numeric_values['smooth'])
             flattened['segmentation_thresholds'] = ordered_thresholds
+
+        if 'text_supervision' in config_dict:
+            text_supervision = config_dict['text_supervision']
+            required_keys = {'loss', 'temperature'}
+            missing_keys = required_keys.difference(text_supervision)
+            if missing_keys:
+                raise ValueError(
+                    "text_supervision config is missing required keys: "
+                    f"{sorted(missing_keys)}"
+                )
+            flattened['text_loss_name'] = str(
+                text_supervision['loss']
+            ).lower()
+            flattened['text_loss_temperature'] = float(
+                text_supervision['temperature']
+            )
 
         # 处理服务器配置
         if 'server' in config_dict:
