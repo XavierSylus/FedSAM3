@@ -1,0 +1,17 @@
+server_name: sam3-medical-segmentation
+model_path: null  # Set to pretrained weight path if available
+
+inputs:
+  model_arch: str  # One of: resnet11, resnet56, resnet18, resnet50, resnet18_client
+  pretrained_path: str  # Optional: path to pretrained weights (.pth file)
+  freeze_encoder: bool  # Whether to freeze image encoder (default: true)
+  freeze_layers: list[str]  # Optional: specific layers to freeze (e.g., ['layer1', 'layer2'])
+  img_size: int  # Input image size (default: 1024)
+  num_classes: int  # Number of segmentation classes (default: 1)
+  image_path: str  # Path to input medical image for inference
+
+outputs:
+  mask: list[list[float]]  # Segmentation mask as 2D array
+  shape: list[int]  # Output mask shape [H, W]
+  device: str  # Device used for inference
+  model_info: dict  # Model architecture and configuration info

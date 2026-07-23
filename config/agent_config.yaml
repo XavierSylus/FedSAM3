@@ -1,0 +1,59 @@
+# SAM3 Agent 配置文件
+# 用于配置智能代理推理功能
+
+# SAM3 模型配置
+sam3:
+  # SAM3 模型路径（如果为 None，将使用默认配置）
+  model_path: null
+  # 设备：cuda 或 cpu
+  device: "cuda"
+  # 置信度阈值
+  confidence_threshold: 0.5
+
+# LLM 配置
+llm:
+  # LLM 服务器地址（必需）
+  # 示例: "http://127.0.0.1:8000"
+  server_url: "http://127.0.0.1:8000"
+  
+  # LLM 模型名称
+  # 示例: "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8"
+  model: "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8"
+  
+  # API 密钥（如果需要）
+  api_key: null
+  
+  # 最大生成 token 数
+  max_tokens: 4096
+
+# 输出配置
+output:
+  # 输出目录
+  output_dir: "agent_output"
+  
+  # 是否启用调试模式
+  debug: false
+  
+  # 是否保存中间结果
+  save_intermediate: true
+
+# 推理配置
+inference:
+  # 最大生成轮数（防止无限循环）
+  max_generations: 100
+  
+  # 是否自动清理临时文件
+  cleanup_temp_files: true
+
+# 医学图像处理配置
+medical_image:
+  # 默认切片索引（如果为 null，使用中间切片）
+  default_slice_idx: null
+  
+  # NIfTI 转换时的窗口设置
+  window_center: null  # 如果为 null，自动计算
+  window_width: null   # 如果为 null，自动计算
+  
+  # 输出图像格式
+  output_format: "png"  # png 或 jpg
+

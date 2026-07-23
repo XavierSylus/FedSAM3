@@ -1,0 +1,37 @@
+# MCP工具配置文件模板
+# 
+# 使用方法：
+# 1. 复制此文件到 tools_factory/incoming_raw/your_tool_name/tool.yaml
+# 2. 根据你的工具修改以下内容：
+#    - server_name: 工具名称
+#    - inputs: 输入参数定义
+#    - outputs: 输出结果定义
+# 3. 运行 python -m tools_factory.builder 编译
+
+# Server名称（必需）
+# 如果不提供，将使用文件夹名称（下划线替换为连字符）
+server_name: your-tool-name  # TODO: 修改为你的工具名称
+
+# 模型路径（可选）
+# 如果工具需要预训练权重，可以在这里指定
+model_path: null  # TODO: 或设置为 "path/to/model.pth"
+
+# 输入参数定义（必需）
+# 格式：参数名: 类型
+# 支持的类型：str, int, float, bool, list[str], dict, any
+inputs:
+  param1: str      # TODO: 参数1：字符串类型
+  param2: int      # TODO: 参数2：整数类型
+  param3: bool     # TODO: 参数3：布尔类型
+  # param4: list[str] # TODO: 参数4：字符串列表（取消注释）
+  # param5: dict     # TODO: 参数5：字典类型（取消注释）
+  # optional_param: str  # TODO: 可选参数（取消注释）
+
+# 输出结果定义（必需）
+# 格式：字段名: 类型
+outputs:
+  result: any      # TODO: 主要结果
+  status: str      # TODO: 状态信息
+  # shape: list[int] # TODO: 输出形状（取消注释）
+  # device: str     # TODO: 使用的设备（取消注释）
+  # info: dict      # TODO: 其他信息（取消注释）

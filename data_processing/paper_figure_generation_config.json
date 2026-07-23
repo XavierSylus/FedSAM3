@@ -1,0 +1,120 @@
+{
+  "output_dir": "results/paper_figures",
+  "std_ddof": 1,
+  "matplotlib_rc": {
+    "font.family": "DejaVu Sans",
+    "axes.titlesize": 10,
+    "axes.labelsize": 9,
+    "pdf.fonttype": 42,
+    "ps.fonttype": 42,
+    "svg.fonttype": "none"
+  },
+  "fig2": {
+    "history_root": "C:/Users/73648/Desktop/\u8bba\u6587\u6570\u636e/ABC\u4e3b\u5b9e\u9a8c/02_logs_csv",
+    "seeds": [3407, 3408, 3409],
+    "title": "Training dynamics of Groups A, B, and C",
+    "output_basename": "training_curves_clean_v2",
+    "figsize": [8.2, 6.2],
+    "dpi": 300,
+    "groups": [
+      {
+        "key": "group_a",
+        "label": "A: image-only FedAvg",
+        "color": "#8b8f97"
+      },
+      {
+        "key": "group_b",
+        "label": "B: hetero FedAvg",
+        "color": "#4f7fa7"
+      },
+      {
+        "key": "group_c",
+        "label": "C: hetero FedAvg + restricted routing",
+        "color": "#2f6f8f"
+      }
+    ],
+    "metrics": [
+      {
+        "name": "dice",
+        "title": "Validation Dice",
+        "ylabel": "Dice"
+      },
+      {
+        "name": "train_loss",
+        "title": "Training Loss",
+        "ylabel": "Loss"
+      },
+      {
+        "name": "hd95",
+        "title": "Validation HD95",
+        "ylabel": "HD95 (mm)",
+        "invalid_min": 999999.0,
+        "drop_incomplete_rounds": true
+      },
+      {
+        "name": "grad_conflict_deg",
+        "title": "Gradient Conflict",
+        "ylabel": "Angle (deg)",
+        "groups": ["group_b", "group_c"]
+      }
+    ]
+  },
+  "fig4": {
+    "table3_main_by_seed": "C:/Users/73648/Desktop/\u8bba\u6587\u6570\u636e/\u6700\u7ec8\u7248\u8bba\u6587\u5bf9\u5e94\u7684\u7ed3\u679c\u6c47\u603b\u8868/table3(1)main_table_by_seed.csv",
+    "table3_fedprox_d_by_seed": "C:/Users/73648/Desktop/\u8bba\u6587\u6570\u636e/\u6700\u7ec8\u7248\u8bba\u6587\u5bf9\u5e94\u7684\u7ed3\u679c\u6c47\u603b\u8868/table3(2)fedprox_d_by_seed.csv",
+    "seeds": [3407, 3408, 3409],
+    "title": "Main endpoint comparison across A/B/C/D protocols",
+    "output_basename": "table4_endpoint_comparison",
+    "figsize": [7.4, 3.95],
+    "dpi": 300,
+    "groups": [
+      {
+        "key": "A",
+        "label": "A: image-only FedAvg",
+        "color": "#8b8f97",
+        "source": "table3_main",
+        "source_group": "group_a"
+      },
+      {
+        "key": "B",
+        "label": "B: hetero FedAvg",
+        "color": "#4f7fa7",
+        "source": "table3_main",
+        "source_group": "group_b"
+      },
+      {
+        "key": "C",
+        "label": "C: hetero FedAvg + restricted routing",
+        "color": "#2f6f8f",
+        "source": "table3_main",
+        "source_group": "group_c"
+      },
+      {
+        "key": "D",
+        "label": "D: hetero FedProx",
+        "color": "#b45f4d",
+        "source": "table3_fedprox_d"
+      }
+    ],
+    "metrics": [
+      {
+        "name": "final_dice",
+        "column": "final_dice",
+        "title": "Endpoint overlap",
+        "ylabel": "Final Dice",
+        "ylim": [0.8, 0.905],
+        "value_format": "{:.4f}",
+        "label_offset": 0.003
+      },
+      {
+        "name": "final_hd95",
+        "column": "final_hd95",
+        "title": "Endpoint boundary error",
+        "ylabel": "Final HD95 (mm)",
+        "ylim": [8.0, 13.4],
+        "value_format": "{:.3f}",
+        "label_offset": 0.12
+      }
+    ]
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "protocol": "ICASSP strict routing x FedProx comparison",
+  "seed": 3407,
+  "fixed_controls": {
+    "clients": [
+      "client_2:image_only",
+      "client_3:multimodal"
+    ],
+    "aggregation_method": "fedavg",
+    "lambda_cream": 0.1,
+    "client_init_policy": "round_global",
+    "persist_client_optimizer": false,
+    "rounds": 60,
+    "local_epochs": 1
+  },
+  "matrix": [
+    {
+      "cell": "U-FedAvg",
+      "restricted_routing": false,
+      "fedprox": false,
+      "config": "configs/icassp_2x2_u_fedavg.yaml"
+    },
+    {
+      "cell": "U-FedProx",
+      "restricted_routing": false,
+      "fedprox": true,
+      "mu": 0.01,
+      "config": "configs/icassp_2x2_u_fedprox.yaml"
+    },
+    {
+      "cell": "R-FedAvg",
+      "restricted_routing": true,
+      "fedprox": false,
+      "config": "configs/icassp_2x2_r_fedavg.yaml"
+    },
+    {
+      "cell": "R-FedProx",
+      "restricted_routing": true,
+      "fedprox": true,
+      "mu": 0.01,
+      "config": "configs/icassp_2x2_r_fedprox.yaml"
+    }
+  ],
+  "missing_modality_settings": [
+    {
+      "ratio": 0.5,
+      "clients": [
+        "image_only",
+        "multimodal"
+      ],
+      "scope": "main_2x2"
+    },
+    {
+      "ratio": 0.6666666666666666,
+      "clients": [
+        "text_only",
+        "image_only",
+        "multimodal"
+      ],
+      "config": "configs/icassp_ratio_2of3_r_fedprox.yaml"
+    }
+  ],
+  "diagnostic_groups": [
+    "VISION_ADAPTER",
+    "TEXT_ADAPTER",
+    "IMAGE_PARAMS",
+    "TEXT_PARAMS",
+    "COMPAT_FALLBACK"
+  ]
+}

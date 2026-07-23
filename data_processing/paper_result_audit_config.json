@@ -1,0 +1,15 @@
+{
+  "data_dir": "C:/Users/73648/Desktop/论文数据",
+  "docm_path": "C:/Users/73648/Desktop/paper_writing/提交版/1.9.docm",
+  "pdf_path": "C:/Users/73648/Desktop/paper_writing/提交版/1.9.pdf",
+  "output_dir": "C:/tmp/paper_result_audit_1_9",
+  "rounding": {
+    "dice": 4,
+    "hd95": 3,
+    "grad_conflict": 3
+  },
+  "std_mode": "sample",
+  "std_mode_by_family": {
+    "fedprox_d": "population"
+  }
+}

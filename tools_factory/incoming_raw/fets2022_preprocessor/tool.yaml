@@ -1,0 +1,52 @@
+server_name: fets2022-preprocessor
+
+# 输入参数定义
+inputs:
+  action: str  # 操作类型: 'preprocess_site', 'preprocess_all_sites', 'get_info'
+  
+  # 路径参数
+  base_path: str  # 原始数据路径（默认: '/mnt/diskB/name/FeTS2022'）
+  save_base_path: str  # 保存路径（默认: '/mnt/diskB/name/FeTS2022_FedDG_1024'）
+  
+  # 站点参数
+  site: str  # 站点ID（当action为preprocess_site时必需，可选值: '1', '4', '5', '6', '13', '16', '18', '20', '21'）
+  sites: list[str]  # 站点列表（当action为preprocess_all_sites时，默认: ['1', '4', '5', '6', '13', '16', '18', '20', '21']）
+  
+  # 数据处理参数
+  split: str  # 数据集分割（默认: 'train'）
+  image_size: int  # 输出图像尺寸（默认: 1024）
+  label_size: int  # 输出标签尺寸（默认: 256）
+
+# 输出结果定义
+outputs:
+  status: str  # 操作状态: 'success' 或 'error'
+  action: str  # 执行的操作
+  
+  # 单站点处理结果（当action为preprocess_site时）
+  site: str  # 处理的站点ID
+  total_samples: int  # 总样本数
+  processed_slices: int  # 处理的切片数
+  total_slices: int  # 总切片数
+  images_shape: list[int]  # 图像形状
+  labels_shape: list[int]  # 标签形状
+  save_dir: str  # 保存目录
+  label_dir: str  # 标签目录
+  
+  # 多站点处理结果（当action为preprocess_all_sites时）
+  total_sites: int  # 总站点数
+  success_sites: int  # 成功处理的站点数
+  error_sites: int  # 失败的站点数
+  results: list[dict]  # 每个站点的处理结果列表
+  
+  # 信息查询结果（当action为get_info时）
+  base_path: str  # 基础路径
+  save_base_path: str  # 保存路径
+  split: str  # 数据集分割
+  image_size: int  # 图像尺寸
+  label_size: int  # 标签尺寸
+  available_sites: list[str]  # 可用站点列表
+  
+  # 错误信息
+  error: str  # 错误信息（如果status为error）
+  error_type: str  # 错误类型（如果status为error）
+

@@ -1,0 +1,76 @@
+# FedSAM3-Cream 基线实验配置
+# Baseline experiment configuration for FedSAM3-Cream
+
+# 数据配置
+data_root: data/federated_split
+
+# 训练基础参数
+training:
+  batch_size: 6  # ✅ 修复：从 2 增加到 6（减少梯度噪声，提升 BN 和对比学习效果）
+  learning_rate: 0.00005  # ★ Fix: 3e-4 → 5e-5，配合 clamp(-15,15) 防止梯度爆炸
+  rounds: 50
+  local_epochs: 1
+
+# CreamFL 对比学习参数
+cream:
+  lambda_cream: 0.02  # ★ Fix: 0.1 → 0.02，让 seg_loss 主导（对比损失仅作正则项）
+  tau: 0.07          # 温度参数
+
+# 模型参数
+model:
+  img_size: 1024  # ✅ 修复：改为 1024 以匹配 BraTS 加载器 (src/data/brats_loader.py:1054)
+  embed_dim: 768
+  decoder_dim: 256
+  num_classes: 1
+  adapter_skip: 64
+
+# 服务器聚合参数
+server:
+  aggregation_method: contrastive_weighted  # contrastive_weighted | similarity_weighted | fedavg
+  global_rep_alpha: 0.9  # 全局表示更新时的指数移动平均系数
+
+# ★ Fix High 7 (2026-03-13): 补充 clients 字段
+# 供 federated_trainer.setup_validation() 动态加载验证集使用，
+# 与 scripts/setup_serial_clients.py 中的客户端定义保持一致。
+clients:
+  - client_id: client_1
+    modality: text_only
+    enabled: true
+    has_private: true
+  - client_id: client_2
+    modality: image_only
+    enabled: true
+    has_private: true
+  - client_id: client_3
+    modality: multimodal
+    enabled: true
+    has_private: true
+
+# ★ Fix Medium（对比维度与 embed_dim 对齐）
+# getattr(config, 'contrastive_dim', 1024) 的回退值可能与实际不符，
+# 显式指定为 768 与 model.embed_dim 保持一致。
+contrastive_dim: 768
+
+# 训练选项
+options:
+  use_amp: true      # 是否使用自动混合精度（FP16）
+  grad_clip: 1.0     # ✅ 修复：添加梯度裁剪（防止梯度爆炸）
+  use_dummy: false   # 是否使用虚拟数据（用于快速测试）
+
+# 日志记录配置
+logging:
+  log_type: tensorboard  # wandb | tensorboard | both | none
+  log_dir: null          # 日志目录（null 表示使用默认路径 logs/）
+  experiment_name: null  # 实验名称（null 表示自动生成时间戳名称）
+  wandb_project: FedSAM3-Cream  # WandB 项目名称
+  wandb_entity: null     # WandB entity（用户名或团队名，null 表示使用默认）
+
+# 设备配置（通常由代码自动检测，可在此覆盖）
+device: cuda  # cuda | cpu
+
+# 检查点配置
+checkpoint:
+  checkpoint_interval: 10  # 每隔 N 轮保存检查点（0 表示不保存）
+  resume_from_checkpoint: null  # 检查点路径，如果为 null 则从头开始训练
+  keep_checkpoint_max: 5  # 最多保留的检查点数量（0 表示保留所有）
+

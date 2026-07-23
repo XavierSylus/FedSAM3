@@ -1,0 +1,52 @@
+{
+  "canvas": {
+    "icon_size": 96,
+    "padding": 18,
+    "gap": 34
+  },
+  "colors": {
+    "snowflake": "#0b4ea2",
+    "snowflake_background": "#eff6ff",
+    "snowflake_border": "#4d84cf",
+    "flame": "#ff6b1a",
+    "flame_deep": "#e43f16",
+    "flame_light": "#ffb15a",
+    "mri_background": "#111111",
+    "mri_brain_outer": "#d9d9d9",
+    "mri_brain_inner": "#f6f6f6",
+    "mri_shadow": "#8c8c8c",
+    "mri_line": "#6f6f6f",
+    "mask_background": "#111111",
+    "mask_region": "#ffffff",
+    "server_body": "#5f6f7a",
+    "server_face": "#7d8c96",
+    "server_shadow": "#3f4b52",
+    "server_light_green": "#34a853",
+    "server_light_orange": "#f97316",
+    "client_blue": "#0b4ea2",
+    "client_blue_background": "#eff6ff",
+    "client_green": "#2f7d3b",
+    "client_green_background": "#f0f8ed",
+    "client_gray": "#9ca3af",
+    "client_gray_background": "#f5f5f5",
+    "client_screen": "#ffffff"
+  },
+  "stroke": {
+    "snowflake": 5.0,
+    "snowflake_branch": 3.2,
+    "mri_detail": 1.4
+  },
+  "output": {
+    "svg_path": "figures/framework_icons.svg",
+    "standalone": {
+      "snowflake": "figures/icon_snowflake.svg",
+      "flame": "figures/icon_flame.svg",
+      "mri_slice": "figures/icon_mri_slice.svg",
+      "mask": "figures/icon_mask.svg",
+      "server": "figures/icon_server.svg",
+      "local_client_blue": "figures/icon_local_client_blue.svg",
+      "local_client_green": "figures/icon_local_client_green.svg",
+      "local_client_light_gray": "figures/icon_local_client_light_gray.svg"
+    }
+  }
+}

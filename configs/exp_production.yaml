@@ -1,0 +1,84 @@
+# ===============================================================
+# FedSAM3-Cream 生产训练配置 (Production Mode)
+# 适用于 AutoDL 云服务器全量训练
+# ===============================================================
+
+# 数据配置
+data_root: data/federated_split  # 数据根目录
+
+# ===== 训练基础参数 (Production Settings) =====
+training:
+  batch_size: 1  # 降低到1以避免OOM（真实 batch size）
+  effective_batch_size: 4  # 通过梯度累加实现的有效 batch size
+  accumulation_steps: 4  # 梯度累加步数 = effective_batch_size / batch_size
+  learning_rate: 5.0e-5  # 1e-4 适合大模型微调（更保守）
+  lr_scheduler: cosine  # cosine | linear | step | none
+  lr_warmup_rounds: 5  # 学习率预热轮数（前5轮线性增长到目标 LR）
+  lr_min: 1.0e-6  # Cosine 衰减的最小学习率
+  rounds: 60  # 联邦学习总轮数（修复 2026-03-19：新增10轮，提升 Dice 收敛空间）
+  local_epochs: 1  # 客户端本地训练轮数（保持1，避免联邦客户端漂移）
+  weight_decay: 0.01  # AdamW 权重衰减（防止过拟合）
+  grad_clip: 1.0  # 梯度裁剪阈值（防止梯度爆炸）
+
+# ===== CreamFL 对比学习参数 =====
+cream:
+  lambda_cream: 0.02  # ★ Fix: 0.1 → 0.02，让 seg_loss 主导
+  tau: 0.07  # 温度参数
+
+# ===== 模型参数 =====
+model:
+  img_size: 256  # 输入图像尺寸（真实 SAM3 建议 256 或 512）
+  embed_dim: 768  # ViT-Base: 768, ViT-Large: 1024, ViT-Huge: 1280
+  decoder_dim: 256
+  num_classes: 1
+  adapter_skip: 64
+
+# ===== 服务器聚合参数 =====
+server:
+  aggregation_method: contrastive_weighted  # contrastive_weighted | fedavg
+  global_rep_alpha: 0.9  # 全局表示 EMA 系数
+
+# ===== 训练选项（生产模式）=====
+options:
+  use_amp: true  # 使用混合精度（FP16）节省显存
+  use_dummy: false  # 使用真实SAM3权重进行训练
+  verbose_sanity_check: false  # ⚠️ 关闭冗余的 Sanity Check 日志
+
+# ===== 日志记录配置（生产级）=====
+logging:
+  log_type: tensorboard  # wandb | tensorboard | both | none
+  log_dir: logs/production  # 日志目录
+  experiment_name: FedSAM3_Production_Run  # 实验名称
+  wandb_project: FedSAM3-Cream  # WandB 项目名称（如果使用）
+  wandb_entity: null  # WandB entity（用户名或团队名）
+  log_interval: 1  # 每 N 轮记录一次日志（1 表示每轮都记录）
+
+# ===== 设备配置 =====
+device: cuda  # cuda | cpu（云服务器通常有 GPU）
+
+# ===== 检查点配置（生产级容灾）=====
+checkpoint:
+  checkpoint_interval: 5  # ⚠️ 每 5 轮保存一次检查点（更频繁，防止意外中断）
+  resume_from_checkpoint: null  # 检查点路径（恢复训练时填写）
+  keep_checkpoint_max: 10  # ⚠️ 保留最近 10 个检查点（云服务器磁盘充足）
+  save_best_model: true  # 额外保存验证集最佳模型
+  save_final_model: true  # 训练结束时保存最终模型
+
+# ===== 验证与评估配置 =====
+validation:
+  val_interval: 5  # 每 5 轮验证一次
+  save_masks: true  # 保存分割掩码用于可视化
+  max_masks: 100  # 最多保存 100 个掩码样本
+
+# ===== 数据增强（生产环境可选）=====
+augmentation:
+  random_flip: true  # 随机水平/垂直翻转
+  random_rotation: false  # 随机旋转（医学影像通常不建议）
+  random_crop: false  # 随机裁剪
+  color_jitter: false  # 颜色抖动（医学影像不推荐）
+
+# ===== 系统优化配置 =====
+system:
+  num_workers: 4  # DataLoader 的 worker 数量
+  pin_memory: true  # 是否锁页内存（加速数据传输）
+  persistent_workers: true  # 保持 worker 进程存活（减少启动开销）
