@@ -136,6 +136,9 @@ class FederatedConfig:
     proxy_k_batches: int = 1
     """生成全局 proxy 时使用的公共批次数量（>=1）"""
 
+    proxy_client_id: Optional[str] = None
+    """固定公共代理来源客户端；启用Cream损失时必须显式配置"""
+
     baseline_method: str = "none"
     """外部 baseline 方法：none | fedprox"""
 
@@ -420,6 +423,7 @@ class FederatedConfig:
             flattened['disable_global_rep_update'] = server.get('disable_global_rep_update', False)
             flattened['strict_aggregation_guard'] = server.get('strict_aggregation_guard', False)
             flattened['proxy_k_batches'] = server.get('proxy_k_batches', 1)
+            flattened['proxy_client_id'] = server.get('proxy_client_id')
 
         # 处理 baseline 配置
         if 'baseline' in config_dict:

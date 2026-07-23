@@ -3,27 +3,34 @@ import math
 import pytest
 import torch
 
-from src.update_diagnostics import compute_parameter_group_diagnostics
+from src.update_diagnostics import (
+    compute_parameter_group_diagnostics,
+    flatten_parameter_group_diagnostics,
+)
 
 
 def test_group_diagnostics_detect_opposite_and_aligned_updates():
     global_state = {
         "adapters.0.weight": torch.zeros(2),
         "fusion_head.text_proj.weight": torch.zeros(2),
+        "fusion_head._fusion_gate.0.weight": torch.zeros(2),
     }
     client_updates = {
         "image": {
             "adapters.0.weight": torch.tensor([1.0, 0.0]),
             "fusion_head.text_proj.weight": torch.tensor([1.0, 0.0]),
+            "fusion_head._fusion_gate.0.weight": torch.tensor([0.0, 1.0]),
         },
         "multi": {
             "adapters.0.weight": torch.tensor([-1.0, 0.0]),
             "fusion_head.text_proj.weight": torch.tensor([1.0, 0.0]),
+            "fusion_head._fusion_gate.0.weight": torch.tensor([0.0, 1.0]),
         },
     }
     aggregated_state = {
         "adapters.0.weight": torch.zeros(2),
         "fusion_head.text_proj.weight": torch.tensor([1.0, 0.0]),
+        "fusion_head._fusion_gate.0.weight": torch.tensor([0.0, 1.0]),
     }
 
     result = compute_parameter_group_diagnostics(
@@ -38,13 +45,26 @@ def test_group_diagnostics_detect_opposite_and_aligned_updates():
     assert conflicts["VISION_ADAPTER"]["angle_deg"] == pytest.approx(180.0)
     assert conflicts["TEXT_PARAMS"]["cosine_similarity"] == pytest.approx(1.0)
     assert conflicts["TEXT_PARAMS"]["angle_deg"] == pytest.approx(0.0)
+    assert conflicts["FUSION_PARAMS"]["cosine_similarity"] == pytest.approx(1.0)
 
     image_drift = result["client_drift"]["image"]["VISION_ADAPTER"]
     assert image_drift["update_l2"] == pytest.approx(1.0)
+    assert image_drift["update_rms"] == pytest.approx(1.0 / math.sqrt(2.0))
+    assert image_drift["parameter_count"] == 1
     assert math.isfinite(image_drift["relative_drift"])
 
     summary = result["conflict_summary"]["VISION_ADAPTER"]
     assert summary["negative_cosine_ratio"] == pytest.approx(1.0)
+    assert summary["conflict_rate"] == pytest.approx(1.0)
+
+    rows = flatten_parameter_group_diagnostics(3, result)
+    assert {row["row_type"] for row in rows} == {
+        "client_drift",
+        "pairwise_conflict",
+        "conflict_summary",
+        "server_drift",
+    }
+    assert all(row["round"] == 3 for row in rows)
 
 
 def test_group_diagnostics_require_shared_keys_for_conflict():
@@ -62,3 +82,6 @@ def test_group_diagnostics_require_shared_keys_for_conflict():
     )
 
     assert result["pairwise_conflicts"] == []
+    summary = result["conflict_summary"]["VISION_ADAPTER"]
+    assert summary["pair_count"] == 0
+    assert summary["conflict_rate"] is None

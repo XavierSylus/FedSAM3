@@ -41,6 +41,7 @@ server:
   aggregation_method: fedavg
   global_rep_alpha: 0.9
   proxy_k_batches: 4
+  proxy_client_id: client_3
   strict_aggregation_guard: true
 baseline:
   method: fedprox

@@ -13,7 +13,6 @@ from src.model import SAM3_Medical, DEVICE
 from src.contrastive_aggregation import ContrastiveWeightAggregation
 from src.knowledge_distillation import KnowledgeDistillation
 from src.parameter_groups import (
-    COMPAT_FALLBACK,
     allowed_modalities,
     classify_parameter,
     is_vision_parameter,
@@ -192,16 +191,12 @@ class CreamAggregator:
             i for i, w in enumerate(client_weights_list)
             if w is not None and param_name in w
         ]
+        route_label = classify_parameter(param_name)
 
         if client_modalities is None or len(client_modalities) != len(client_weights_list):
             return uploaded_indices
 
-        route_label = classify_parameter(param_name)
         route_modalities = allowed_modalities(route_label)
-        if route_label == COMPAT_FALLBACK:
-            route_modalities = frozenset(
-                client_modalities[i] for i in uploaded_indices
-            )
 
         filtered_indices = [
             i for i in uploaded_indices if client_modalities[i] in route_modalities

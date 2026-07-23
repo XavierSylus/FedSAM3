@@ -1,47 +1,57 @@
 # ICASSP Experiment Protocol
 
-## Client Model
+## Client Model Structure
 
 The client model is `SAM3MedicalIntegrated`:
 
-- frozen SAM3 image backbone;
-- trainable vision adapters;
-- image and text projection heads;
-- text prompt encoder;
-- mask decoder, output mapping, and medical segmentation head.
+- the pretrained SAM3 foundation parameters remain frozen;
+- parameter-efficient adapters and task heads are trainable;
+- every client instantiates the same model skeleton;
+- modality controls the optimizer scope, upload scope, and restricted aggregation route.
 
-The optimizer is modality-aware:
+Trainable and uploaded parameters use one shared classifier:
 
-| Client | Trainable and upload scope |
-|---|---|
-| `image_only` | vision adapters, image projection, decoder and segmentation heads; unrestricted experiments also upload unchanged text parameters |
-| `multimodal` | all trainable parameters |
-| `text_only` | text projection parameters |
+| Group | Modules | Eligible modalities under restricted routing |
+|---|---|---|
+| `VISION_ADAPTER` | vision adapters, wrapped vision blocks, LoRA | `image_only`, `multimodal` |
+| `TEXT_ADAPTER` | text adapters | `text_only`, `multimodal` |
+| `IMAGE_PARAMS` | image projection, prompt/mask decoder, output and medical segmentation heads | `image_only`, `multimodal` |
+| `TEXT_PARAMS` | text encoder and text projection | `text_only`, `multimodal` |
+| `FUSION_PARAMS` | cross-modal text mapping and fusion gate | `multimodal` |
+
+Every trainable or uploaded parameter must belong to exactly one group. An
+unclassified parameter terminates the run.
 
 ## Upload, Aggregation, and Dispatch
 
 For round `t`:
 
 1. The server snapshots the trainable round-global state `w_t`.
-2. Every selected client initializes from the same `w_t`.
-3. Every client creates a fresh optimizer and performs local training.
-4. The client uploads its modality-specific trainable state.
-5. The server forms the union of uploaded parameter keys.
-6. Unrestricted aggregation uses every client that uploaded a key.
-7. Restricted aggregation additionally filters uploaders using the parameter-group routing rules.
-8. FedAvg is applied independently for each parameter key.
-9. Missing keys retain their value from `w_t`.
-10. The aggregated state becomes `w_(t+1)` and is dispatched in the next round.
+2. `client_3` and its fixed public multimodal loader generate one image proxy
+   and one text proxy from `w_t`; the same detached pair is dispatched to all clients.
+3. Missing, empty, non-finite, or zero-norm proxies terminate the run.
+4. Every client initializes from the same `w_t` and creates a fresh optimizer.
+5. Local training updates only the modality-specific optimizer scope.
+6. Each client uploads only its configured state subset and its public representation.
+7. Before aggregation, all client deltas are computed against the same `w_t`.
+8. Unrestricted routing uses every client that uploaded a classified key.
+9. Restricted routing additionally filters uploaders by the table above.
+10. FedAvg is applied independently to each parameter key; keys without an eligible
+    update retain their value from `w_t`.
+11. The result becomes `w_(t+1)` and is dispatched at the next round.
 
 FedProx changes only the local objective:
 
 `L_local = L_task + mu / 2 * sum(||w - w_t||_2^2)`
 
-The proximal term is evaluated only on trainable parameters within the client's upload scope.
+The proximal term is evaluated exactly once and only on trainable parameters
+within the client's upload scope. It does not change any task-loss definition.
 
 ## Strict 2x2 Comparison
 
-All four cells use the same clients, data, seed, initialization, optimizer lifecycle, learning rates, local epochs, task losses, and FedAvg implementation.
+All four cells use `client_2:image_only` and `client_3:multimodal`, seed `3407`,
+the same data, round-global initialization, fresh optimizer lifecycle, learning
+rates, local epochs, task losses, public proxies, and FedAvg implementation.
 
 | Cell | Restricted routing | FedProx | Config |
 |---|---:|---:|---|
@@ -78,7 +88,7 @@ The routing and diagnostics share the same parameter classifier:
 - `TEXT_ADAPTER`
 - `IMAGE_PARAMS`
 - `TEXT_PARAMS`
-- `COMPAT_FALLBACK`
+- `FUSION_PARAMS`
 
 For client `i`, group `g`, and round `t`:
 
@@ -89,16 +99,20 @@ Recorded client drift:
 - update L2 norm;
 - reference L2 norm;
 - relative drift;
-- number of analyzed parameters.
+- update RMS;
+- number of scalar elements and parameter tensors.
 
 For each client pair, conflict is computed on their shared keys within the group:
 
 - cosine similarity;
 - conflict angle in degrees;
 - negative-cosine indicator;
-- group-level negative-cosine ratio.
+- shared scalar and parameter counts;
+- group-level conflict rate, defined as the fraction of pairs with negative cosine.
 
 Global parameter drift is computed between the aggregated state and the pre-round global state. Results are saved under `parameter_group_diagnostics` in `training_history.json`.
+Each completed round is also appended immediately to
+`parameter_group_diagnostics.jsonl` and `parameter_group_diagnostics.csv`.
 
 ## Reproducibility
 

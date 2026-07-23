@@ -634,12 +634,26 @@ class BaseClientTrainer(ABC):
         global_reps: Dict[str, torch.Tensor]
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """投影全局表示到对比学习空间（若需要）"""
+        required = {
+            "global_text_rep": global_reps.get("global_text_rep"),
+            "global_image_rep": global_reps.get("global_image_rep"),
+        }
+        invalid = [
+            name
+            for name, value in required.items()
+            if not isinstance(value, torch.Tensor)
+            or value.numel() == 0
+            or not torch.isfinite(value).all()
+            or torch.linalg.vector_norm(value.float()).item() <= 1e-12
+        ]
+        if invalid:
+            raise ValueError(
+                "Global representation contract violated: "
+                f"missing, empty, non-finite, or zero-norm values for {invalid}"
+            )
 
-        _zeros = torch.zeros(self.contrastive_dim, device=self.device)
-        _raw_text = global_reps.get('global_text_rep')
-        global_text_rep = _raw_text.to(self.device) if _raw_text is not None else _zeros.clone()
-        _raw_image = global_reps.get('global_image_rep')
-        global_image_rep = _raw_image.to(self.device) if _raw_image is not None else _zeros.clone()
+        global_text_rep = required["global_text_rep"].detach().to(self.device)
+        global_image_rep = required["global_image_rep"].detach().to(self.device)
 
         expected_dim = getattr(model, 'contrastive_dim', 1024)
 
@@ -790,27 +804,12 @@ class BaseClientTrainer(ABC):
         }
 
     def get_model_state(self, model: nn.Module) -> Dict[str, torch.Tensor]:
-        """获取可训练参数状态字典，排除 RoPE buffer（freqs_cis 等不参与聚合）。"""
-        trainable_param_names = {name for name, p in model.named_parameters() if p.requires_grad}
-        # ★ 痛点修复 v2（2026-03-22）：白名单改为精确前缀匹配，防止误包含 sam3_model 内部的冻结模块。
-        # 原问题：'adapter' 误匹配 sam3_model.backbone...adapter（冻结），'decoder' 误匹配 sam3_model.transformer.decoder（冻结）
-        # 修复：使用顶层模块前缀（adapter_manager., fusion_head., medical_seg_head., _output_conv.），精准定位 PEFT 可训练模块。
-        ALWAYS_INCLUDE_PREFIXES = [
-            'adapter_manager.',  # 顶层 Adapter，PEFT 核心
-            'fusion_head.',      # 多模态融合头
-            'medical_seg_head.', # 医学分割头
-            '_output_conv.',     # 输出卷积层
-            'wrapped_blocks.',   # SAM-Adapter 包装块
-        ]
-        full_state = model.state_dict()
-        filtered_dict = {}
-        for k, v in full_state.items():
-            if any(rope_key in k for rope_key in ['freqs_cis', 'freqs_cos', 'freqs_sin', 'relative_coords']):
-                continue
-            # 优先匹配 requires_grad，白名单作为兜底保护（防止模块未被 get_trainable_params 包含）
-            if k in trainable_param_names or any(k.startswith(prefix) for prefix in ALWAYS_INCLUDE_PREFIXES):
-                filtered_dict[k] = v.clone().cpu()
-        return filtered_dict
+        """Return exactly the named trainable parameters uploaded by the client."""
+        return {
+            name: parameter.detach().cpu().clone()
+            for name, parameter in model.named_parameters()
+            if parameter.requires_grad
+        }
 
     def load_model_state(
         self,
@@ -1093,17 +1092,6 @@ class TextOnlyTrainer(BaseClientTrainer):
         # lambda_cream（通常 0.02）会导致梯度缩水 50 倍，文本表征无法更新。
         # ══════════════════════════════════════════════════════════════
         total_loss = cream_loss  # ← 不乘 lambda_cream，永远如此
-
-        # FedProx 近端约束（μ=0.01）：防止 text_encoder 客户端漂离全局模型
-        _MU = 0.01
-        global_weights = global_reps.get('global_weights', None)
-        if global_weights is not None:
-            proximal_term = torch.tensor(0.0, device=self.device)
-            for name, param in model.named_parameters():
-                if 'text_encoder' in name and param.requires_grad and name in global_weights:
-                    global_param = global_weights[name].to(self.device)
-                    proximal_term = proximal_term + torch.norm(param - global_param) ** 2
-            total_loss = total_loss + (_MU / 2.0) * proximal_term
 
         # 收集文本表征（用于服务器端全局表征 EMA 更新）
         public_rep = text_rep.mean(dim=0)  # (D_text,)
@@ -1535,8 +1523,9 @@ class MultimodalTrainer(BaseClientTrainer):
             _pub_txt = self._last_pub_text_rep
             text_rep = _pub_txt.mean(dim=0).cpu() if _pub_txt.dim() > 1 else _pub_txt.cpu()
         if text_rep is None:
-            text_rep = torch.zeros_like(local_reps)
-            training_stats['text_rep_missing_fallback'] = 1.0
+            raise RuntimeError(
+                "Multimodal client did not produce a public text representation"
+            )
         return self.get_model_state(model), local_reps, text_rep, training_stats
 
 

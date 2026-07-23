@@ -24,6 +24,7 @@ from torch.utils.data import DataLoader, ConcatDataset
 from typing import List, Dict, Tuple, Optional, Any
 import sys
 import json
+import csv
 from pathlib import Path
 from datetime import datetime
 import numpy as np
@@ -47,7 +48,10 @@ from src.integrated_model import SAM3MedicalIntegrated as SAM3_Medical
 from src.client import TextOnlyTrainer, ImageOnlyTrainer, MultimodalTrainer
 from src.server import CreamAggregator
 from src.logger import create_logger
-from src.update_diagnostics import compute_parameter_group_diagnostics
+from src.update_diagnostics import (
+    compute_parameter_group_diagnostics,
+    flatten_parameter_group_diagnostics,
+)
 from data.heterogeneous_dataset_loader import create_heterogeneous_data_loaders
 
 
@@ -369,6 +373,7 @@ class FederatedTrainer:
                 getattr(self.config, "persist_client_optimizer", False)
             ),
             "strict_protocol_check": bool(getattr(self.config, "strict_protocol_check", True)),
+            "proxy_client_id": getattr(self.config, "proxy_client_id", None),
             "data_root": str(getattr(self.config, "data_root", "")),
             "clients": client_entries,
             "missing_modality_client_ratio": self._missing_modality_client_ratio(
@@ -740,6 +745,139 @@ class FederatedTrainer:
 
         return 0
 
+    def _prepare_round_global_reps(self) -> Dict[str, torch.Tensor]:
+        """Build one round-global proxy pair and share it with every client."""
+        disable_refresh = bool(
+            getattr(self.config, "disable_global_rep_update", False)
+        )
+        if disable_refresh:
+            round_global_reps = self.server.get_global_reps()
+            proxy_client_id = "frozen_server_representations"
+        else:
+            configured_proxy_id = str(
+                getattr(self.config, "proxy_client_id", "") or ""
+            ).strip()
+            if not configured_proxy_id:
+                if float(getattr(self.config, "lambda_cream", 0.0)) > 0:
+                    raise RuntimeError(
+                        "Cream training requires server.proxy_client_id"
+                    )
+                round_global_reps = self.server.get_global_reps()
+                proxy_client_id = "server_representations"
+            else:
+                matching_sources = [
+                    (client_id, cfg)
+                    for client_id, cfg in self.client_configs.items()
+                    if self._normalize_client_id(client_id)
+                    == self._normalize_client_id(configured_proxy_id)
+                ]
+                if len(matching_sources) != 1:
+                    raise RuntimeError(
+                        f"Configured proxy client not found: {configured_proxy_id}"
+                    )
+                proxy_client_id, proxy_config = matching_sources[0]
+                if proxy_config.get("modality") != "multimodal":
+                    raise RuntimeError(
+                        f"Proxy client must be multimodal: {proxy_client_id}"
+                    )
+                proxy_loader = proxy_config.get("public_loader")
+                if proxy_loader is None:
+                    raise RuntimeError(
+                        f"Proxy client has no public loader: {proxy_client_id}"
+                    )
+                global_image_rep, global_text_rep = (
+                    self.server.generate_and_dispatch_global_proxies(
+                        self.global_model,
+                        proxy_loader,
+                        self.device,
+                    )
+                )
+                round_global_reps = {
+                    "global_image_rep": global_image_rep,
+                    "global_text_rep": global_text_rep,
+                }
+
+        invalid = [
+            name
+            for name in ("global_image_rep", "global_text_rep")
+            if not isinstance(round_global_reps.get(name), torch.Tensor)
+            or round_global_reps[name].numel() == 0
+            or not torch.isfinite(round_global_reps[name]).all()
+            or torch.linalg.vector_norm(
+                round_global_reps[name].detach().float()
+            ).item() <= 1e-12
+        ]
+        if invalid:
+            raise RuntimeError(
+                f"Invalid shared round-global proxies from {proxy_client_id}: {invalid}"
+            )
+
+        print(
+            f"[Protocol] Shared round-global proxies generated from {proxy_client_id}"
+        )
+        return {
+            name: round_global_reps[name].detach()
+            for name in ("global_image_rep", "global_text_rep")
+        }
+
+    def _persist_parameter_group_diagnostics(
+        self,
+        round_num: int,
+        diagnostics: Dict[str, Any],
+    ) -> None:
+        output_dir = Path(self.config.log_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        jsonl_path = output_dir / "parameter_group_diagnostics.jsonl"
+        with jsonl_path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {"round": round_num, **diagnostics},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+
+        rows = flatten_parameter_group_diagnostics(round_num, diagnostics)
+        csv_path = output_dir / "parameter_group_diagnostics.csv"
+        fieldnames = [
+            "round",
+            "row_type",
+            "client_id",
+            "client_a",
+            "client_b",
+            "modality_a",
+            "modality_b",
+            "parameter_group",
+            "update_l2",
+            "reference_l2",
+            "relative_drift",
+            "update_rms",
+            "numel",
+            "parameter_count",
+            "cosine_similarity",
+            "angle_deg",
+            "is_negative",
+            "shared_numel",
+            "shared_parameter_count",
+            "pair_count",
+            "negative_pair_count",
+            "negative_cosine_ratio",
+            "conflict_rate",
+            "mean_cosine_similarity",
+            "mean_angle_deg",
+        ]
+        write_header = not csv_path.exists()
+        with csv_path.open("a", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=fieldnames,
+                extrasaction="raise",
+            )
+            if write_header:
+                writer.writeheader()
+            writer.writerows(rows)
 
 
     def _train_single_round(self, round_num: int):
@@ -764,6 +902,7 @@ class FederatedTrainer:
                 f"[Baseline] FedProx active: mu={getattr(self.config, 'fedprox_mu', 0.0):.4f}, "
                 f"shared_round_global_keys={len(round_global_reference_state)}"
             )
+        round_global_reps = self._prepare_round_global_reps()
         
         # === 串行训练：逐个客户端训练 ===
         for client_idx, (client_id, cfg) in enumerate(self.client_configs.items(), 1):
@@ -900,26 +1039,7 @@ class FederatedTrainer:
             trainer = self.client_trainers[client_id]
 
             try:
-                # 准备全局表示：用真实前向传播的 Proxy 替换随机 EMA 噪声
-                public_loader = cfg.get('public_loader', None)
-                disable_global_rep_update = bool(
-                    getattr(self.config, 'disable_global_rep_update', False)
-                )
-                if self.config.lambda_cream > 0 and disable_global_rep_update:
-                    frozen_global_reps = self.server.get_global_reps()
-                    global_img_rep = frozen_global_reps.get('global_image_rep')
-                    global_text_rep = frozen_global_reps.get('global_text_rep')
-                    print("      [Ablation] Global representation refresh disabled; using frozen server reps")
-                elif public_loader is not None and self.config.lambda_cream > 0:
-                    global_img_rep, global_text_rep = self.server.generate_and_dispatch_global_proxies(
-                        self.global_model, public_loader, self.device
-                    )
-                else:
-                    global_img_rep, global_text_rep = None, None
-                global_reps = {
-                    'global_image_rep': global_img_rep,
-                    'global_text_rep': global_text_rep,
-                }
+                global_reps = round_global_reps
 
                 # ★ 核心修复：所有客户端统一使用 trainer.run() 训练
                 # client.py Phase 2 已通过多态分发解决模态逻辑：
@@ -1094,6 +1214,10 @@ class FederatedTrainer:
             },
             client_modalities=client_modality_map,
             aggregated_state=aggregated_state,
+        )
+        self._persist_parameter_group_diagnostics(
+            round_num,
+            round_group_diagnostics,
         )
         
         # 更新全局模型
