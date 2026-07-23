@@ -1,0 +1,46 @@
+server_name: federated-dataloader
+
+# 输入参数定义
+inputs:
+  action: str  # 操作类型: 'build_dataset', 'build_dataloader', 'get_sample', 'get_batch', 'get_info'
+  dataset_type: str  # 数据集类型: 'Dataset', 'ProstateDataset', 'BraTSDataset', 'AMOSDataset'
+  
+  # 数据集参数
+  data_path: str  # 数据路径
+  data_format: str  # 数据格式: 'nii.gz' 或 'npy'（默认: 'nii.gz'）
+  modalities: list[str]  # 模态列表: ['T1', 'T2', 'FLAIR']（默认: ['T1', 'T2', 'FLAIR']）
+  client_idx: int  # 客户端索引
+  freq_site_idx: int  # 频率站点索引（可选）
+  split: str  # 数据集分割: 'train', 'val', 'test'（默认: 'train'）
+  client_name: list[str]  # 客户端名称列表（可选）
+  
+  # DataLoader参数
+  batch_size: int  # 批次大小（默认: 1）
+  shuffle: bool  # 是否打乱（默认: true）
+  num_workers: int  # 工作进程数（默认: 0）
+  pin_memory: bool  # 是否固定内存（默认: false）
+  
+  # 数据获取参数
+  sample_idx: int  # 样本索引（当action为get_sample时）
+  include_data: bool  # 是否包含实际数据（默认: false）
+
+# 输出结果定义
+outputs:
+  status: str  # 操作状态: 'success' 或 'error'
+  action: str  # 执行的操作
+  dataset_type: str  # 数据集类型
+  dataset_info: dict  # 数据集信息（长度等）
+  batch_size: int  # 批次大小（当action为build_dataloader或get_batch时）
+  sample_idx: int  # 样本索引（当action为get_sample时）
+  image_shape: list[int]  # 图像形状
+  label_shape: list[int]  # 标签形状
+  image: list  # 图像数据（当include_data为true时）
+  label: list  # 标签数据（当include_data为true时）
+  message: str  # 消息（可选）
+  error: str  # 错误信息（如果status为error）
+
+
+
+
+
+

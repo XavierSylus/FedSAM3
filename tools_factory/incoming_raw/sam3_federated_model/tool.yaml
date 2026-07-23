@@ -1,0 +1,20 @@
+server_name: sam3-federated-medical-segmentation
+model_path: null  # Set to SAM3 checkpoint path if available
+
+inputs:
+  use_sam3: bool  # Whether to use real SAM3 model (default: true)
+  freeze_encoder: bool  # Whether to freeze image encoder (default: true)
+  use_adapter: bool  # Whether to use adapter modules (default: true)
+  sam3_checkpoint: str  # Optional: path to SAM3 pretrained weights
+  img_size: int  # Input image size (default: 1024)
+  num_classes: int  # Number of segmentation classes (default: 1)
+  adapter_dim: int  # Adapter dimension (default: 64)
+  image_path: str  # Path to input medical image for inference
+  device: str  # Device to use ('cuda' or 'cpu')
+
+outputs:
+  mask: list[list[float]]  # Segmentation mask as 2D array
+  shape: list[int]  # Output mask shape [H, W]
+  device: str  # Device used for inference
+  model_info: dict  # Model architecture and configuration info
+  trainable_params_info: dict  # Information about trainable parameters

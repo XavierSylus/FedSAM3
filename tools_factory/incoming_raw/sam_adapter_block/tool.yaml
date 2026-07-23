@@ -1,0 +1,51 @@
+server_name: sam-adapter-block
+
+# 输入参数定义
+inputs:
+  action: str  # 操作类型: 'build', 'forward', 'get_info'
+  block_type: str  # 模块类型: 'MergeAndConv', 'SideClassifer', 'UpsampleSKConv', 'SKSPP'
+  
+  # MergeAndConv 参数
+  ic: int  # 输入通道数（默认: 256）
+  oc: int  # 输出通道数（默认: 256）
+  inner: int  # 内部通道数（默认: 32）
+  
+  # SideClassifer 参数
+  n_class: int  # 类别数（默认: 1）
+  M: int  # 分支数量（默认: 2）
+  kernel_size: int  # 卷积核大小（默认: 1）
+  
+  # UpsampleSKConv 参数
+  reduce: int  # 减少比例（默认: 4）
+  
+  # SKSPP 参数
+  features: int  # 特征通道数（默认: 256）
+  WH: int  # 输入空间维度（默认: 64）
+  G: int  # 卷积组数（默认: 1）
+  r: int  # 计算d的比例（默认: 16）
+  stride: int  # 步长（默认: 1）
+  L: int  # 向量z的最小维度（默认: 32）
+  
+  # 前向传播参数
+  input_shape: list[int]  # 输入形状，例如 [1, 256, 64, 64]
+  input_data: list[list[list[list[float]]]]  # 输入数据（可选，如果不提供则使用随机数据）
+
+# 输出结果定义
+outputs:
+  status: str  # 操作状态: 'success' 或 'error'
+  action: str  # 执行的操作
+  block_type: str  # 模块类型
+  block_info: dict  # 模块信息（参数数量等）
+  input_shape: list[int]  # 输入形状（当action为forward时）
+  output_shape: list[int] | list[list[int]]  # 输出形状（当action为forward时）
+  output_data: list[list[list[list[float]]]] | list[list[list[list[list[float]]]]]  # 输出数据（当action为forward时）
+  message: str  # 消息（可选）
+  error: str  # 错误信息（如果status为error）
+
+
+
+
+
+
+
+

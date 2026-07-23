@@ -1,0 +1,24 @@
+{
+  "render": {
+    "font_size": 28,
+    "text_color": "#111827",
+    "background": "none",
+    "padding_inches": 0.04,
+    "figure_width_inches": 6.0,
+    "figure_height_inches": 1.0,
+    "dpi": 300,
+    "svg_fonttype": "path"
+  },
+  "formulas": [
+    {
+      "id": "loss_seg_dice_ce",
+      "latex": "$\\mathcal{L}_{seg}\\;(\\mathrm{Dice}+\\mathrm{CE})$",
+      "output": "figures/formula_loss_seg_dice_ce.svg"
+    },
+    {
+      "id": "loss_seg_cream_align",
+      "latex": "$\\mathcal{L}_{seg}+\\lambda_c(\\mathcal{L}_{cream}+\\mathcal{L}_{align})$",
+      "output": "figures/formula_loss_seg_cream_align.svg"
+    }
+  ]
+}

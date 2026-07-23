@@ -1,0 +1,65 @@
+data_root: data/federated_split
+federated:
+  clients:
+  - client_id: client_2
+    modality: image_only
+    data_source: data/federated_split/client2_image_only/dataset.json
+    enabled: true
+  - client_id: client_3
+    modality: multimodal
+    data_source: data/federated_split/client3_multimodal/dataset.json
+    enabled: true
+  use_decoupled_agg: true
+training:
+  batch_size: 1
+  effective_batch_size: 4
+  accumulation_steps: 4
+  learning_rate: 5.0e-05
+  lr_scheduler: cosine
+  lr_warmup_rounds: 5
+  lr_min: 1.0e-06
+  rounds: 60
+  local_epochs: 1
+  weight_decay: 0.01
+  grad_clip: 1.0
+cream:
+  lambda_cream: 0.1
+  tau: 0.07
+model:
+  img_size: 256
+  embed_dim: 768
+  decoder_dim: 256
+  num_classes: 3
+  adapter_skip: 64
+server:
+  aggregation_method: fedavg
+  global_rep_alpha: 0.9
+  disable_global_rep_update: true
+  proxy_k_batches: 4
+  strict_aggregation_guard: true
+options:
+  use_amp: true
+  use_dummy: false
+  verbose_sanity_check: false
+logging:
+  log_type: tensorboard
+  log_dir: logs/ablation_c_wo_global_rep_update
+  experiment_name: FedSAM3_Ablation_GroupC_NoGlobalRepUpdate
+  wandb_project: FedSAM3-Cream
+  wandb_entity: null
+  log_interval: 1
+device: cuda
+checkpoint:
+  checkpoint_interval: 5
+  resume_from_checkpoint: null
+  keep_checkpoint_max: 10
+  save_best_model: true
+  save_final_model: true
+validation:
+  val_interval: 1
+  save_masks: true
+  max_masks: 50
+system:
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true

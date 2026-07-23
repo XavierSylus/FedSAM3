@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100" role="img" aria-labelledby="title desc">
+  <title id="title">MRI slice icon</title>
+  <desc id="desc">Original vector MRI slice icon drawn from abstract geometry, not from patient data.</desc>
+  <rect x="18" y="10" width="64" height="80" rx="8" fill="#111111"/>
+  <ellipse cx="50" cy="50" rx="24" ry="33" fill="#d9d9d9"/>
+  <ellipse cx="39" cy="50" rx="13.5" ry="26" fill="#f6f6f6"/>
+  <ellipse cx="61" cy="50" rx="13.5" ry="26" fill="#f6f6f6"/>
+  <path d="M50 18 C44 30 44 42 50 50 C56 58 56 70 50 82" fill="none" stroke="#8c8c8c" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M38 30 C45 36 35 44 43 51 C47 55 43 65 36 70" fill="none" stroke="#8c8c8c" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M62 30 C55 37 65 45 57 52 C53 57 57 66 64 70" fill="none" stroke="#8c8c8c" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M32 43 C39 41 42 46 39 52 C36 57 39 62 45 64" fill="none" stroke="#6f6f6f" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M68 43 C61 41 58 46 61 52 C64 57 61 62 55 64" fill="none" stroke="#6f6f6f" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M36 22 C29 30 28 42 31 53 C34 66 34 74 30 82" fill="none" stroke="#5a5a5a" stroke-width="1.1" stroke-linecap="round" opacity="0.75"/>
+  <path d="M64 22 C71 30 72 42 69 53 C66 66 66 74 70 82" fill="none" stroke="#5a5a5a" stroke-width="1.1" stroke-linecap="round" opacity="0.75"/>
+</svg>

@@ -1,0 +1,49 @@
+{
+  "created_at_utc": "2026-05-06T14:51:15.194109+00:00",
+  "command": [
+    "C:\\Users\\73648\\Desktop\\毕业设计\\SegSAM\\scripts\\generate_figures_from_existing_outputs.py",
+    "--config",
+    "C:\\Users\\73648\\Desktop\\毕业设计\\SegSAM\\configs\\figure_generation_config.json",
+    "--history",
+    "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\history.csv",
+    "--segmentation-table",
+    "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\samples.csv",
+    "--output-dir",
+    "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\out"
+  ],
+  "git_commit": "unknown",
+  "config_path": "C:\\Users\\73648\\Desktop\\毕业设计\\SegSAM\\configs\\figure_generation_config.json",
+  "history_path": "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\history.csv",
+  "generated_files": [
+    "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\out\\loss_curve.png",
+    "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\out\\loss_curve.svg",
+    "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\out\\loss_curve.pdf",
+    "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\out\\metrics_dice_iou.png",
+    "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\out\\metrics_dice_iou.svg",
+    "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\out\\metrics_dice_iou.pdf",
+    "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\out\\metrics_hd95.png",
+    "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\out\\metrics_hd95.svg",
+    "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\out\\metrics_hd95.pdf",
+    "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\out\\segmentation_results_grid.png",
+    "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\out\\segmentation_results_grid.svg",
+    "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\out\\segmentation_results_grid.pdf"
+  ],
+  "copied_generation_files": [
+    "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\out\\generation_scripts\\generate_figures_from_existing_outputs.py",
+    "H:\\FedSAM3-Cream\\segsam_figure_smoke_tmp\\out\\generation_scripts\\figure_generation_config.json"
+  ],
+  "package_versions": {
+    "python": "3.12.7 | packaged by Anaconda, Inc. | (main, Oct  4 2024, 13:17:27) [MSC v.1929 64 bit (AMD64)]",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "numpy": "1.26.4",
+    "matplotlib": "3.10.0",
+    "pillow": "10.4.0",
+    "nibabel": "5.3.2"
+  },
+  "svg_notes": {
+    "loss_curve": "pure vector",
+    "metrics_dice_iou": "pure vector",
+    "metrics_hd95": "pure vector",
+    "segmentation_results_grid": "bitmap container when image panels are embedded"
+  }
+}

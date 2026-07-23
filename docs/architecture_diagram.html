@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FedSAM3-Cream 架构图</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #fdfdfd;
+    font-family: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 24px;
+  }
+  .diagram {
+    width: 1200px;
+    position: relative;
+  }
+  .title {
+    text-align: center;
+    font-size: 22px;
+    font-weight: 700;
+    color: #2c3e50;
+    margin-bottom: 6px;
+    letter-spacing: 2px;
+  }
+  .subtitle {
+    text-align: center;
+    font-size: 13px;
+    color: #7f8c8d;
+    margin-bottom: 20px;
+  }
+
+  /* ---------- 主布局 ---------- */
+  .main-row {
+    display: flex;
+    gap: 0;
+    align-items: stretch;
+  }
+  .col-client { flex: 0 0 420px; }
+  .col-channel { flex: 0 0 170px; display: flex; flex-direction: column; justify-content: center; align-items: center; position: relative; }
+  .col-server { flex: 1; }
+
+  /* ---------- 区域标题 ---------- */
+  .zone-label {
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    padding: 4px 14px;
+    border-radius: 4px;
+    display: inline-block;
+    margin-bottom: 10px;
+    letter-spacing: 1px;
+  }
+  .zone-client-bg { background: #5b7faa; }
+  .zone-server-bg { background: #3d8b7a; }
+
+  /* ---------- Client 卡片 ---------- */
+  .client-card {
+    border: 1.5px solid;
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+    background: #fff;
+    position: relative;
+  }
+  .client-card.text-only { border-color: #9b8ec4; }
+  .client-card.image-only { border-color: #5b86b8; }
+  .client-card.multimodal { border-color: #3d8b7a; }
+  .client-card.text-only .client-header { color: #7c6aad; }
+  .client-card.image-only .client-header { color: #4a73a0; }
+  .client-card.multimodal .client-header { color: #2d7566; }
+
+  .client-header {
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .client-role {
+    font-size: 11px;
+    color: #95a5a6;
+    margin-bottom: 6px;
+  }
+  .client-io {
+    font-size: 11.5px;
+    color: #34495e;
+    line-height: 1.7;
+  }
+  .io-label {
+    font-weight: 600;
+    color: #2c3e50;
+  }
+  .no-weight {
+    display: inline-block;
+    font-size: 10.5px;
+    color: #c0392b;
+    border: 1px dashed #c0392b;
+    border-radius: 3px;
+    padding: 1px 6px;
+    margin-left: 4px;
+  }
+
+  /* ---------- Facade 嵌套模型 ---------- */
+  .facade-box {
+    border: 1px dashed #bdc3c7;
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-top: 8px;
+    background: #fafbfc;
+  }
+  .facade-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: #7f8c8d;
+    margin-bottom: 6px;
+  }
+  .module-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .module-chip {
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    color: #fff;
+    font-weight: 500;
+  }
+  .chip-frozen { background: #95a5a6; }
+  .chip-adapter { background: #5b86b8; }
+  .chip-fusion { background: #3d8b7a; }
+  .chip-seghead { background: #d4783a; }
+  .chip-textprompt { background: #9b8ec4; }
+
+  /* ---------- 损失函数 ---------- */
+  .loss-box {
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 10px 12px;
+    background: #fff;
+    margin-top: 6px;
+  }
+  .loss-title {
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #2c3e50;
+    margin-bottom: 4px;
+  }
+  .loss-items {
+    font-size: 10.5px;
+    color: #555;
+    line-height: 1.8;
+  }
+  .loss-highlight {
+    background: #fef3e2;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 600;
+    color: #d4783a;
+  }
+
+  /* ---------- 通信信道 ---------- */
+  .channel-arrows {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+    padding: 0 10px;
+  }
+  .arrow-group {
+    text-align: center;
+    width: 100%;
+  }
+  .arrow-group-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #7f8c8d;
+    margin-bottom: 8px;
+  }
+  .arrow-item {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 6px;
+    font-size: 10px;
+    color: #34495e;
+  }
+  .arrow-line {
+    width: 24px;
+    height: 2px;
+    margin: 0 6px;
+  }
+  .arrow-solid { background: #5b86b8; }
+  .arrow-dashed {
+    background: repeating-linear-gradient(90deg, #9b8ec4, #9b8ec4 4px, transparent 4px, transparent 8px);
+  }
+  .arrow-down-solid { background: #3d8b7a; }
+  .arrow-down-dashed {
+    background: repeating-linear-gradient(90deg, #3d8b7a, #3d8b7a 4px, transparent 4px, transparent 8px);
+  }
+  .upload-icon { color: #c0392b; font-size: 14px; }
+  .download-icon { color: #27ae60; font-size: 14px; }
+
+  /* ---------- Server 卡片 ---------- */
+  .server-card {
+    border: 1.5px solid #3d8b7a;
+    border-radius: 8px;
+    padding: 14px 16px;
+    background: #fff;
+  }
+  .server-header {
+    font-size: 15px;
+    font-weight: 700;
+    color: #2d7566;
+    margin-bottom: 12px;
+  }
+  .server-section {
+    margin-bottom: 12px;
+  }
+  .server-section:last-child { margin-bottom: 0; }
+  .section-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #2c3e50;
+    margin-bottom: 6px;
+    padding-left: 2px;
+    border-left: 3px solid;
+  }
+  .section-title.st-route { border-color: #e67e22; padding-left: 8px; }
+  .section-title.st-agg { border-color: #3498db; padding-left: 8px; }
+  .section-title.st-ema { border-color: #27ae60; padding-left: 8px; }
+  .section-title.st-probe { border-color: #c0392b; padding-left: 8px; }
+
+  /* 五级路由 */
+  .route-table { width: 100%; font-size: 10.5px; border-collapse: collapse; }
+  .route-table td {
+    padding: 4px 8px;
+    border: 1px solid #ecf0f1;
+  }
+  .route-table .level-col {
+    font-weight: 700;
+    color: #fff;
+    text-align: center;
+    width: 26px;
+    border-radius: 2px;
+  }
+  .rt-l1 { background: #9b8ec4; }
+  .rt-l2 { background: #5b86b8; }
+  .rt-l3 { background: #9b8ec4; }
+  .rt-l4 { background: #5b86b8; }
+  .rt-l5 { background: #95a5a6; }
+  .route-table .type-col { color: #2c3e50; font-weight: 600; }
+  .route-table .admit-col { color: #7f8c8d; font-size: 10px; }
+
+  /* 聚合 */
+  .agg-flow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #34495e;
+    padding: 6px 0;
+  }
+  .agg-step {
+    background: #ebf5fb;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 500;
+    color: #2980b9;
+    font-size: 10.5px;
+  }
+  .agg-arrow { color: #bdc3c7; }
+
+  /* EMA */
+  .ema-row {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+  .ema-circle {
+    width: 120px;
+    height: 40px;
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: #fff;
+  }
+  .ema-img { background: #5b86b8; }
+  .ema-txt { background: #9b8ec4; }
+  .ema-alpha {
+    font-size: 11px;
+    color: #27ae60;
+    font-weight: 700;
+  }
+  .ema-source {
+    font-size: 9.5px;
+    color: #7f8c8d;
+    margin-top: 3px;
+    text-align: center;
+  }
+
+  /* 探针 */
+  .probe-box {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #fdf2f2;
+    border: 1px solid #e8cece;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 11px;
+    color: #c0392b;
+  }
+  .probe-icon { font-size: 14px; }
+
+  /* ---------- 底部时间线 ---------- */
+  .timeline {
+    margin-top: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+  .timeline-bar {
+    flex: 1;
+    height: 2px;
+    background: linear-gradient(90deg, #5b86b8, #3d8b7a);
+    position: relative;
+  }
+  .timeline-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #7f8c8d;
+    white-space: nowrap;
+  }
+  .timeline-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #3d8b7a;
+  }
+
+  /* ---------- 图例 ---------- */
+  .legend {
+    margin-top: 14px;
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10.5px;
+    color: #7f8c8d;
+  }
+  .legend-line {
+    width: 24px;
+    height: 2px;
+  }
+  .legend-box {
+    width: 14px; height: 14px;
+    border-radius: 3px;
+    border: 1.5px solid;
+  }
+
+  /* 中间通道分割线 */
+  .channel-divider {
+    width: 1px;
+    flex: 1;
+    background: repeating-linear-gradient(180deg, #ddd, #ddd 4px, transparent 4px, transparent 8px);
+    margin: 0 0;
+  }
+
+  /* SVG 箭头区域 */
+  .svg-arrows {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div class="diagram">
+
+  <!-- 标题 -->
+  <div class="title">FedSAM3-Cream 联邦学习架构</div>
+  <div class="subtitle">异构医疗数据的多模态联邦学习 · 解耦对比聚合机制</div>
+
+  <!-- 主体三列 -->
+  <div class="main-row">
+
+    <!-- ============ 左列：客户端 ============ -->
+    <div class="col-client">
+      <div><span class="zone-label zone-client-bg">客户端侧 · 本地训练</span></div>
+
+      <!-- Client 1 -->
+      <div class="client-card text-only">
+        <div class="client-header">📝 Client 1 — 纯文本客户端</div>
+        <div class="client-role">角色：知识提供者 (Knowledge Provider)</div>
+        <div class="client-io">
+          <span class="io-label">输入：</span>BERT 文本特征 (768-dim)<br>
+          <span class="io-label">产出：</span>text_rep
+          <span class="no-weight">weights = None · 永不参与参数聚合</span>
+        </div>
+      </div>
+
+      <!-- Client 2 -->
+      <div class="client-card image-only">
+        <div class="client-header">🖼️ Client 2 — 纯图像客户端</div>
+        <div class="client-role">角色：视觉分割训练</div>
+        <div class="client-io">
+          <span class="io-label">输入：</span>医学图像 + 分割掩码<br>
+          <span class="io-label">产出：</span>weights + image_rep
+        </div>
+      </div>
+
+      <!-- Client 3 -->
+      <div class="client-card multimodal">
+        <div class="client-header">🧬 Client 3 — 多模态客户端</div>
+        <div class="client-role">角色：多模态锚点 · 视觉分割 + 跨模态对齐</div>
+        <div class="client-io">
+          <span class="io-label">输入：</span>成对图文 + 分割掩码<br>
+          <span class="io-label">产出：</span>weights + image_rep + text_rep
+        </div>
+      </div>
+
+      <!-- 共享模型 -->
+      <div class="facade-box">
+        <div class="facade-title">共享模型 · SAM3MedicalIntegrated (Facade 门面)</div>
+        <div class="module-row">
+          <span class="module-chip chip-frozen">SAM3 主干 (冻结)</span>
+          <span class="module-chip chip-adapter">Adapter 注入器</span>
+          <span class="module-chip chip-fusion">融合头</span>
+          <span class="module-chip chip-seghead">分割头</span>
+          <span class="module-chip chip-textprompt">文本提示编码器</span>
+        </div>
+      </div>
+
+      <!-- 损失函数 -->
+      <div class="loss-box">
+        <div class="loss-title">损失函数组合</div>
+        <div class="loss-items">
+          <span class="loss-highlight">Seg</span> RobustMedicalLoss v4：Tversky(α=0.3,β=0.7) + Log-Dice<br>
+          <span class="loss-highlight">Cream</span> CreamFL 对比损失 × λ_cream<br>
+          <span class="loss-highlight">稳定</span> 梯度裁剪 + 三档学习率 + 梯度累积(×4)
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 中列：通信信道 ============ -->
+    <div class="col-channel">
+      <div class="channel-arrows">
+
+        <!-- 上传 -->
+        <div class="arrow-group">
+          <div class="arrow-group-title">⬆ 上传至服务器</div>
+
+          <div class="arrow-item">
+            <span style="color:#9b8ec4">C1</span>
+            <div class="arrow-line arrow-dashed"></div>
+            <span>仅 text_rep</span>
+          </div>
+
+          <div class="arrow-item">
+            <span style="color:#5b86b8">C2</span>
+            <div class="arrow-line arrow-solid"></div>
+            <span>weights + img_rep</span>
+          </div>
+
+          <div class="arrow-item">
+            <span style="color:#3d8b7a">C3</span>
+            <div class="arrow-line arrow-solid"></div>
+            <span>全量三元组</span>
+          </div>
+        </div>
+
+        <!-- 分隔 -->
+        <div style="width:80%;height:1px;background:#e0e0e0;"></div>
+
+        <!-- 下发 -->
+        <div class="arrow-group">
+          <div class="arrow-group-title">⬇ 下发至客户端</div>
+
+          <div class="arrow-item">
+            <div class="arrow-line arrow-down-solid"></div>
+            <span>聚合全局参数</span>
+          </div>
+
+          <div class="arrow-item">
+            <div class="arrow-line arrow-down-dashed"></div>
+            <span>全局表征(EMA)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 右列：服务器 ============ -->
+    <div class="col-server">
+      <div><span class="zone-label zone-server-bg">服务器侧 · 聚合与蒸馏</span></div>
+
+      <div class="server-card">
+        <div class="server-header">CreamAggregator 聚合器</div>
+
+        <!-- 五级路由 -->
+        <div class="server-section">
+          <div class="section-title st-route">① 五级白名单解耦聚合路由</div>
+          <table class="route-table">
+            <tr>
+              <td class="level-col rt-l1">L1</td>
+              <td class="type-col">文本 Adapter</td>
+              <td class="admit-col">→ text_only + multimodal</td>
+            </tr>
+            <tr>
+              <td class="level-col rt-l2">L2</td>
+              <td class="type-col">视觉 Adapter</td>
+              <td class="admit-col">→ image_only + multimodal</td>
+            </tr>
+            <tr>
+              <td class="level-col rt-l3">L3</td>
+              <td class="type-col">文本参数</td>
+              <td class="admit-col">→ text_only + multimodal</td>
+            </tr>
+            <tr>
+              <td class="level-col rt-l4">L4</td>
+              <td class="type-col">图像/分割参数</td>
+              <td class="admit-col">→ image_only + multimodal</td>
+            </tr>
+            <tr>
+              <td class="level-col rt-l5">L5</td>
+              <td class="type-col">兜底 (Fallback)</td>
+              <td class="admit-col">→ 按实际上传方决定</td>
+            </tr>
+          </table>
+        </div>
+
+        <!-- 对比加权 -->
+        <div class="server-section">
+          <div class="section-title st-agg">② 对比加权聚合</div>
+          <div class="agg-flow">
+            <span class="agg-step">客户端表征</span>
+            <span class="agg-arrow">→</span>
+            <span class="agg-step">余弦相似度</span>
+            <span class="agg-arrow">→</span>
+            <span class="agg-step">softmax</span>
+            <span class="agg-arrow">→</span>
+            <span class="agg-step">加权聚合参数</span>
+          </div>
+        </div>
+
+        <!-- EMA -->
+        <div class="server-section">
+          <div class="section-title st-ema">③ 全局表征 EMA 解耦更新</div>
+          <div class="ema-row">
+            <div>
+              <div class="ema-circle ema-img">全局图像表征</div>
+              <div class="ema-source">← image_only + multimodal</div>
+            </div>
+            <div class="ema-alpha">⟳ α=0.9</div>
+            <div>
+              <div class="ema-circle ema-txt">全局文本表征</div>
+              <div class="ema-source">← text_only + multimodal</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 梯度探针 -->
+        <div class="server-section">
+          <div class="section-title st-probe">④ 梯度冲突探针</div>
+          <div class="probe-box">
+            <span class="probe-icon">⚡</span>
+            <span>Δ_adapter(Client2) vs Δ_adapter(Client3) → cos_sim → 冲突角(°)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main-row -->
+
+  <!-- 底部时间线 -->
+  <div class="timeline">
+    <div class="timeline-dot"></div>
+    <span class="timeline-label">Round 1</span>
+    <div class="timeline-bar"></div>
+    <span class="timeline-label">Round 2</span>
+    <div class="timeline-bar"></div>
+    <span class="timeline-label"> ··· </span>
+    <div class="timeline-bar"></div>
+    <span class="timeline-label">Round N</span>
+    <div class="timeline-dot"></div>
+  </div>
+
+  <!-- 图例 -->
+  <div class="legend">
+    <div class="legend-item">
+      <div class="legend-line" style="background:#5b86b8;"></div>
+      <span>实线 = 参数传输</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-line" style="background:repeating-linear-gradient(90deg,#9b8ec4,#9b8ec4 4px,transparent 4px,transparent 8px);"></div>
+      <span>虚线 = 表征传输</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-box" style="background:#95a5a6;border-color:#95a5a6;"></div>
+      <span>冻结模块</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-box" style="background:#5b86b8;border-color:#5b86b8;"></div>
+      <span>可训练模块</span>
+    </div>
+    <div class="legend-item">
+      <span style="font-size:12px;">⊘</span>
+      <span>物理隔离</span>
+    </div>
+    <div class="legend-item">
+      <span style="font-size:12px;">⟳</span>
+      <span>EMA 更新</span>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

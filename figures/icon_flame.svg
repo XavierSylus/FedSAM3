@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100" role="img" aria-labelledby="title desc">
+  <title id="title">Learnable flame icon</title>
+  <desc id="desc">Original vector flame icon for learnable parameter groups.</desc>
+  <circle cx="50" cy="50" r="46" fill="#fff7ed" stroke="#ff6b1a" stroke-width="1.6"/>
+  <path d="M51 83 C34 77 28 64 32 50 C35 39 43 34 43 22 C54 30 58 39 57 48 C64 42 67 35 66 27 C79 43 82 59 73 72 C68 79 61 83 51 83 Z" fill="#ff6b1a"/>
+  <path d="M49 78 C39 73 36 64 39 56 C41 50 47 46 47 37 C55 45 58 52 55 60 C60 56 63 51 63 45 C70 56 68 69 60 75 C57 78 53 79 49 78 Z" fill="#e43f16"/>
+  <path d="M48 73 C43 69 43 62 48 57 C51 63 57 66 54 73 C52 76 50 76 48 73 Z" fill="#ffb15a"/>
+</svg>

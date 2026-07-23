@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100" role="img" aria-labelledby="title desc">
+  <title id="title">Segmentation mask icon</title>
+  <desc id="desc">Original vector segmentation mask icon drawn from abstract geometry, not from a model output.</desc>
+  <rect x="18" y="10" width="64" height="80" rx="8" fill="#111111"/>
+  <path d="M52 82 C40 80 32 71 33 60 C34 52 40 47 42 40 C45 30 43 23 51 17 C55 26 62 31 65 41 C68 52 62 59 64 66 C66 75 61 82 52 82 Z" fill="#ffffff"/>
+  <path d="M45 39 C50 48 42 56 47 66 C51 73 57 75 60 70" fill="none" stroke="#d9d9d9" stroke-width="1.2" stroke-linecap="round" opacity="0.55"/>
+</svg>

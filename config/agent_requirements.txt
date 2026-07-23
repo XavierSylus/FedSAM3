@@ -1,0 +1,28 @@
+# SAM3 Agent 推理功能所需依赖
+# 这些依赖是 agent_inference.py 模块所需的额外包
+
+# LLM 客户端
+openai>=1.0.0
+
+# 图像处理
+opencv-python>=4.5.0
+Pillow>=9.0.0
+
+# 医学图像处理（用于 NIfTI 格式）
+SimpleITK>=2.2.0
+
+# 科学计算
+numpy>=1.21.0
+scipy>=1.7.0
+
+# 可视化
+matplotlib>=3.5.0
+
+# 配置文件解析
+pyyaml>=6.0
+
+# 注意：
+# 1. SAM3 模型本身需要从 core_projects/sam3-main 安装
+# 2. PyTorch 应该已经通过主项目的 requirements.txt 安装
+# 3. LLM 服务器需要单独配置（vLLM 或其他兼容 OpenAI API 的服务）
+
