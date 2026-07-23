@@ -57,7 +57,6 @@ class BaseClientTrainer(ABC):
         grad_clip: float = 1.0,
         accumulation_steps: int = 1,
         enable_text_assist_in_seg: bool = True,
-        allow_text_param_upload: bool = False,
         baseline_method: str = "none",
         fedprox_mu: float = 0.0,
         segmentation_loss: Optional[str] = None,
@@ -92,9 +91,9 @@ class BaseClientTrainer(ABC):
         self.grad_clip = grad_clip
         self.accumulation_steps = max(1, int(accumulation_steps))
         self.enable_text_assist_in_seg = enable_text_assist_in_seg
-        self.allow_text_param_upload = allow_text_param_upload
         self.baseline_method = str(baseline_method).lower()
         self.fedprox_mu = float(fedprox_mu)
+        self._active_optimizer_parameter_names: Optional[frozenset[str]] = None
 
         # 日志器
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -473,8 +472,65 @@ class BaseClientTrainer(ABC):
         pass
 
     def get_uploadable_state(self, model: nn.Module) -> Dict[str, torch.Tensor]:
-        """Return the state subset this client will upload to the server."""
-        return self.get_model_state(model)
+        """Return exactly the named parameters in the active local optimizer."""
+        names = self.get_active_optimizer_parameter_names()
+        named_parameters = dict(model.named_parameters())
+        return {
+            name: named_parameters[name].detach().cpu().clone()
+            for name in sorted(names)
+        }
+
+    @staticmethod
+    def resolve_optimizer_parameter_names(
+        model: nn.Module,
+        optimizer: torch.optim.Optimizer,
+    ) -> frozenset[str]:
+        """Map the explicit optimizer parameter objects to registered names."""
+        names_by_id = {
+            id(parameter): name
+            for name, parameter in model.named_parameters()
+        }
+        optimizer_names = set()
+        seen_parameter_ids = set()
+
+        for group in optimizer.param_groups:
+            for parameter in group["params"]:
+                parameter_id = id(parameter)
+                if parameter_id in seen_parameter_ids:
+                    raise ValueError(
+                        "Optimizer parameter appears in more than one parameter group"
+                    )
+                seen_parameter_ids.add(parameter_id)
+                name = names_by_id.get(parameter_id)
+                if name is None:
+                    raise ValueError(
+                        "Optimizer parameter is not a named parameter of the model"
+                    )
+                if not parameter.requires_grad:
+                    raise ValueError(
+                        f"Optimizer parameter does not require gradients: {name}"
+                    )
+                optimizer_names.add(name)
+
+        if not optimizer_names:
+            raise ValueError("Optimizer must contain at least one named model parameter")
+        return frozenset(optimizer_names)
+
+    def _activate_optimizer_parameter_scope(
+        self,
+        model: nn.Module,
+        optimizer: torch.optim.Optimizer,
+    ) -> None:
+        self._active_optimizer_parameter_names = (
+            self.resolve_optimizer_parameter_names(model, optimizer)
+        )
+
+    def get_active_optimizer_parameter_names(self) -> frozenset[str]:
+        if self._active_optimizer_parameter_names is None:
+            raise RuntimeError(
+                "Optimizer parameter scope is unavailable before local training starts"
+            )
+        return self._active_optimizer_parameter_names
 
     # ========================================================================
     # 共享逻辑：主训练循环
@@ -504,6 +560,7 @@ class BaseClientTrainer(ABC):
         model.train()
 
         self.local_epoch = 0
+        self._activate_optimizer_parameter_scope(model, optimizer)
         self._reset_adapter_grad_tracking(model)
 
         # 本地 Epoch 循环
@@ -554,7 +611,7 @@ class BaseClientTrainer(ABC):
         self._reset_round_diagnostics()
         local_public_reps_list = []
         fedprox_param_names = (
-            set(self.get_uploadable_state(model).keys())
+            self.get_active_optimizer_parameter_names()
             if self.baseline_method == "fedprox" and global_reference_state
             else set()
         )
@@ -667,7 +724,9 @@ class BaseClientTrainer(ABC):
                 continue
             global_param = global_reference_state.get(name)
             if global_param is None:
-                continue
+                raise KeyError(
+                    f"FedProx round-global reference is missing optimizer parameter: {name}"
+                )
             proximal_term = proximal_term + torch.sum(
                 (param - global_param.to(self.device)) ** 2
             )
@@ -850,20 +909,8 @@ class BaseClientTrainer(ABC):
         }
 
     def get_model_state(self, model: nn.Module) -> Dict[str, torch.Tensor]:
-        """Return exactly the parameters declared by the model training registry."""
-        if not hasattr(model, "get_trainable_params"):
-            raise AttributeError(
-                f"{type(model).__name__} must define get_trainable_params()"
-            )
-
-        registered_param_ids = {
-            id(parameter) for parameter in model.get_trainable_params()
-        }
-        return {
-            name: parameter.detach().cpu().clone()
-            for name, parameter in model.named_parameters()
-            if parameter.requires_grad and id(parameter) in registered_param_ids
-        }
+        """Return the exact active optimizer upload payload."""
+        return self.get_uploadable_state(model)
 
     def load_model_state(
         self,
@@ -1057,31 +1104,7 @@ class TextOnlyTrainer(BaseClientTrainer):
         local_reps: torch.Tensor,
         training_stats: Dict
     ) -> Tuple[Optional[Dict], None, torch.Tensor, Dict]:
-        """
-        返回文本专属参数字典。若过滤后文本参数为空直接 raise RuntimeError：
-        静默 fallback 会将视觉参数混入聚合池，击穿物理隔离墙。
-        """
-        full_state = self.get_model_state(model)
-        text_only_state = {
-            k: v for k, v in full_state.items()
-            if 'text_encoder' in k or 'text_proj' in k or 'text_adapter' in k
-        }
-        # 键名与 server.py 路由白名单不一致时快速失败，拒绝静默污染聚合池
-        if len(text_only_state) == 0:
-            param_sample = list(full_state.keys())[:8]
-            raise RuntimeError(
-                "[TextOnlyTrainer.get_return_values] 致命错误：\n"
-                "  过滤关键字 ('text_encoder', 'text_proj', 'text_adapter') "
-                "在模型参数中未命中任何键！\n"
-                f"  full_state 共 {len(full_state)} 个参数，样本键名: {param_sample}\n"
-                "  根本原因：模型参数命名与路由白名单不一致。\n"
-                "  修复方案：\n"
-                "    1. 检查当前模型 named_parameters() 中文本相关参数的实际键名；\n"
-                "    2. 同步更新本函数过滤关键字 和 server.py TEXT_PARAMS / TEXT_ADAPTER_PARAMS；\n"
-                "  程序主动崩溃优于有毒梯度混入聚合池（Fail Fast \u003e Silent Corruption）。"
-            )
-
-        return text_only_state, None, local_reps, training_stats
+        return self.get_uploadable_state(model), None, local_reps, training_stats
 
 
 
@@ -1202,48 +1225,6 @@ class ImageOnlyTrainer(BaseClientTrainer):
 
         return total_loss, seg_loss, cream_loss, public_rep
 
-
-    def get_return_values(
-        self,
-        model: nn.Module,
-        local_reps: torch.Tensor,
-        training_stats: Dict
-    ) -> Tuple[Dict, torch.Tensor, None, Dict]:
-        """
-        返回图像专属结果
-
-        **返回格式**：(image_only_state_dict, image_rep, None, stats)
-
-        ★ 解耦聚合修复（2026-03-16）：
-        ImageOnly 客户端无文本训练数据，其 text_encoder/text_proj 参数
-        在本地训练中未被更新（或只受随机初始化影响）。若这些参数上传聚合，
-        会将未经文本数据训练的噪声权重混入全局 Text Encoder，污染文本表征。
-        因此：过滤掉所有 text 相关参数，只上传图像相关参数。
-        Adapter 等轻量调优模块保留（作为跨客户端共性知识的桥梁）。
-        """
-        full_state = self.get_model_state(model)
-
-        # ★ 物理隔离：剔除未被训练的 text 参数，防止模态污染
-        TEXT_PARAM_KEYWORDS = ('text_encoder', 'text_proj', 'text_adapter')
-        image_only_state = {
-            k: v for k, v in full_state.items()
-            if not any(kw in k for kw in TEXT_PARAM_KEYWORDS)
-        }
-
-        if self.allow_text_param_upload:
-            return full_state, local_reps, None, training_stats
-        return image_only_state, local_reps, None, training_stats
-
-    def get_uploadable_state(self, model: nn.Module) -> Dict[str, torch.Tensor]:
-        full_state = self.get_model_state(model)
-        text_param_keywords = ('text_encoder', 'text_proj', 'text_adapter')
-        image_only_state = {
-            k: v for k, v in full_state.items()
-            if not any(kw in k for kw in text_param_keywords)
-        }
-        if self.allow_text_param_upload:
-            return full_state
-        return image_only_state
 
     def get_return_values(
         self,
@@ -1469,7 +1450,7 @@ class MultimodalTrainer(BaseClientTrainer):
             raise RuntimeError(
                 "Multimodal client did not produce a public text representation"
             )
-        return self.get_model_state(model), local_reps, text_rep, training_stats
+        return self.get_uploadable_state(model), local_reps, text_rep, training_stats
 
 
 # ============================================================================

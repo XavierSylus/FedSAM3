@@ -298,12 +298,6 @@ class FederatedTrainer:
 
         self._validate_group_protocol(expected_clients)
 
-    def _should_allow_text_param_upload(self) -> bool:
-        """B 组需要让 image_only 客户端上传 text 参数以复现实验污染。"""
-        lambda_cream = float(getattr(self.config, "lambda_cream", 0.0))
-        use_decoupled = bool(getattr(self.config, "use_decoupled_agg", False))
-        return lambda_cream > 0.0 and not use_decoupled
-
     def _should_enable_text_assist_in_seg(self) -> bool:
         """文本辅助分割与是否解耦聚合解耦，避免 C 组把监督一并关掉。"""
         return bool(getattr(self.config, "enable_text_assist_in_seg", True))
@@ -580,7 +574,6 @@ class FederatedTrainer:
         # 初始化客户端 Trainer 对象（无模型）
         print("[4/5] 初始化客户端训练器（无状态）...")
         self.client_trainers = {}
-        allow_text_param_upload = self._should_allow_text_param_upload()
         enable_text_assist_in_seg = self._should_enable_text_assist_in_seg()
         segmentation_kwargs = self._segmentation_trainer_kwargs()
         for client_id, cfg in self.client_configs.items():
@@ -596,7 +589,6 @@ class FederatedTrainer:
                 grad_clip=getattr(self.config, 'grad_clip', 1.0),
                 accumulation_steps=getattr(self.config, 'accumulation_steps', 1),
                 enable_text_assist_in_seg=enable_text_assist_in_seg,
-                allow_text_param_upload=allow_text_param_upload,
                 baseline_method=getattr(self.config, 'baseline_method', 'none'),
                 fedprox_mu=getattr(self.config, 'fedprox_mu', 0.0),
                 text_loss_temperature=self.config.text_loss_temperature,
