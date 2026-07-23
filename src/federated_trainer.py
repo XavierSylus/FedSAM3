@@ -1348,11 +1348,10 @@ class FederatedTrainer:
             if self.last_val_metrics:
                 val_dice = self.last_val_metrics.get('dice', 0.0)
                 val_iou = self.last_val_metrics.get('iou', 0.0)
-                val_hd95 = self.last_val_metrics.get('hd95', float('inf'))
+                val_hd95 = self.last_val_metrics['hd95']
                 log_metrics['Val_Dice'] = val_dice
                 log_metrics['Val_IoU'] = val_iou
-                if val_hd95 != float('inf') and not np.isnan(val_hd95):
-                    log_metrics['Val_HD95'] = val_hd95
+                log_metrics['Val_HD95_Pixel'] = val_hd95
             self.logger.log(log_metrics, step=round_num)
         
         # 记录训练历史
@@ -1418,20 +1417,27 @@ class FederatedTrainer:
             )
             
             print(f"  Dice: {val_metrics.get('dice', 0):.4f}, IoU: {val_metrics.get('iou', 0):.4f}")
-            if 'hd95' in val_metrics and val_metrics['hd95'] != float('inf'):
-                print(f"  HD95: {val_metrics['hd95']:.2f} mm")
+            print(f"  HD95: {val_metrics['hd95']:.2f} pixel")
             
             # 记录验证指标到日志系统
             if self.logger is not None:
                 val_dice = val_metrics.get('dice', 0.0)
                 val_iou = val_metrics.get('iou', 0.0)
-                val_hd95 = val_metrics.get('hd95', float('inf'))
                 log_metrics = {
                     'Val_Dice': val_dice,
                     'Val_IoU': val_iou,
+                    'Val_HD95_Pixel': val_metrics['hd95'],
                 }
-                if val_hd95 != float('inf') and not np.isnan(val_hd95):
-                    log_metrics['Val_HD95'] = val_hd95
+                for region in ("WT", "TC", "ET"):
+                    log_metrics[f'Val_{region}_Dice'] = val_metrics[f'{region}_dice']
+                    log_metrics[f'Val_{region}_IoU'] = val_metrics[f'{region}_iou']
+                    log_metrics[f'Val_{region}_HD95_Pixel'] = val_metrics[f'{region}_hd95']
+                    log_metrics[f'Val_{region}_Empty_FP_Rate'] = val_metrics[
+                        f'{region}_empty_fp_rate'
+                    ]
+                    log_metrics[f'Val_{region}_Empty_FN_Rate'] = val_metrics[
+                        f'{region}_empty_fn_rate'
+                    ]
                 self.logger.log(log_metrics, step=round_num)
             
             # 保存最后一次验证指标
@@ -1446,22 +1452,15 @@ class FederatedTrainer:
             else:
                 print(f"  [EarlyStopping] 当前 Dice={_current_dice:.4f} ≤ 历史最佳 Dice={self.best_val_dice:.4f}，不更新")
 
-            self.training_history['val_metrics'].append({
-                'round': round_num,
-                'dice': val_metrics.get('dice', 0.0),
-                'iou': val_metrics.get('iou', 0.0),
-                'hd95': val_metrics.get('hd95', float('inf')),
-                'val_loss': val_metrics.get('val_loss', 0.0)
-            })
+            history_entry = {'round': round_num, **val_metrics}
+            history_entry['val_loss'] = val_metrics.get('val_loss', 0.0)
+            self.training_history['val_metrics'].append(history_entry)
 
             # 显示验证集指标
             print(f"\n    Validation Metrics:")
             print(f"      Dice: {val_metrics.get('dice', 0.0):.4f}")
             print(f"      IoU: {val_metrics.get('iou', 0.0):.4f}")
-            if 'hd95' in val_metrics and val_metrics['hd95'] != float('inf'):
-                print(f"      HD95: {val_metrics['hd95']:.2f} mm")
-            else:
-                print(f"      HD95: N/A")
+            print(f"      HD95: {val_metrics['hd95']:.2f} pixel")
                 
         except Exception as e:
             print(f"  ⚠ Validation failed: {e}")
@@ -1579,10 +1578,7 @@ class FederatedTrainer:
                 print(f"\n最终评估指标:")
                 print(f"  Dice 系数: {final_val_metrics.get('dice', 0.0):.4f}")
                 print(f"  IoU: {final_val_metrics.get('iou', 0.0):.4f}")
-                if 'hd95' in final_val_metrics and final_val_metrics['hd95'] != float('inf'):
-                    print(f"  HD95: {final_val_metrics['hd95']:.2f} mm")
-                else:
-                    print(f"  HD95: N/A")
+                print(f"  HD95: {final_val_metrics['hd95']:.2f} pixel")
                 
                 # 保存分割掩码
                 if self.config.save_masks:
@@ -1623,8 +1619,7 @@ class FederatedTrainer:
             if 'final_val_metrics' in self.training_history:
                 final_metrics = self.training_history['final_val_metrics']
                 summary['final_val_dice'] = final_metrics.get('dice', 0.0)
-                if 'hd95' in final_metrics and final_metrics['hd95'] != float('inf'):
-                    summary['final_val_hd95'] = final_metrics['hd95']
+                summary['final_val_hd95_pixel'] = final_metrics['hd95']
             self.logger.log_summary(summary)
             self.logger.close()
         
@@ -1747,19 +1742,18 @@ class FederatedTrainer:
                 print(f"  [OK] Dice/IoU 曲线已保存: {plot_dir / 'metrics_dice_iou.png'}")
                 
                 # 3. HD95 曲线
-                val_hd95 = [m['hd95'] if m['hd95'] != float('inf') else np.nan for m in self.training_history['val_metrics']]
-                valid_hd95_indices = [i for i, v in enumerate(val_hd95) if not np.isnan(v)]
+                val_hd95 = [m['hd95'] for m in self.training_history['val_metrics']]
                 
-                if valid_hd95_indices:
+                if val_hd95:
                     plt.figure(figsize=(12, 6))
                     plt.plot(
-                        [val_rounds[i] for i in valid_hd95_indices],
-                        [val_hd95[i] for i in valid_hd95_indices],
+                        val_rounds,
+                        val_hd95,
                         label='HD95', color='red', marker='x', linewidth=2
                     )
                     plt.title(f'Validation Metric: HD95 (Round {current_round})', fontsize=14, fontweight='bold')
                     plt.xlabel('Round', fontsize=12)
-                    plt.ylabel('HD95 (mm)', fontsize=12)
+                    plt.ylabel('HD95 (pixel)', fontsize=12)
                     plt.legend(loc='best', fontsize=10)
                     plt.grid(True, alpha=0.3)
                     plt.tight_layout()
@@ -1767,7 +1761,7 @@ class FederatedTrainer:
                     plt.close()
                     print(f"  [OK] HD95 曲线已保存: {plot_dir / 'metrics_hd95.png'}")
                 else:
-                    print(f"  ⚠ 暂无有效的 HD95 数据，跳过 HD95 曲线")
+                    print("  [WARN] No validation HD95 history; curve was not generated")
                     
         except Exception as e:
             print(f"  [FAIL] 绘图失败: {e}")
