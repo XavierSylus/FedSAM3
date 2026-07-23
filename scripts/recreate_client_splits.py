@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 FedSAM3-Cream 数据集重新划分脚本
-CVPR 2026 Workshop - Multi-modal Federated Medical Image Segmentation
+Multi-modal Federated Medical Image Segmentation
 
 功能：
 1. 读取 BraTS 2020 训练集 (train_split.json)
@@ -191,7 +191,7 @@ def main():
     """主函数"""
     print("=" * 80)
     print("FedSAM3-Cream 数据集重新划分")
-    print("CVPR 2026 Workshop - Multi-modal Federated Medical Image Segmentation")
+    print("Multi-modal Federated Medical Image Segmentation")
     print("=" * 80)
     print()
 

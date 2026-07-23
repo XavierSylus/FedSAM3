@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 FedSAM3-Cream 数据加载测试脚本
-CVPR 2026 Workshop - 验证三客户端异构数据加载
+验证三客户端异构数据加载
 
 功能：
 1. 测试 Client 1 (text_only) 的数据加载
@@ -154,7 +154,7 @@ def main():
     """主函数"""
     print("=" * 70)
     print("FedSAM3-Cream 数据加载测试")
-    print("CVPR 2026 Workshop - 异构客户端验证")
+    print("异构客户端验证")
     print("=" * 70)
 
     # 配置数据根目录（根据你的实际路径调整）

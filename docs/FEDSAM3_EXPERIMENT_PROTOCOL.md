@@ -1,4 +1,4 @@
-# ICASSP Experiment Protocol
+# Federated Experiment Protocol
 
 ## Client Model Structure
 
@@ -55,10 +55,10 @@ rates, local epochs, task losses, public proxies, and FedAvg implementation.
 
 | Cell | Restricted routing | FedProx | Config |
 |---|---:|---:|---|
-| U-FedAvg | No | No | `configs/icassp_2x2_u_fedavg.yaml` |
-| U-FedProx | No | Yes | `configs/icassp_2x2_u_fedprox.yaml` |
-| R-FedAvg | Yes | No | `configs/icassp_2x2_r_fedavg.yaml` |
-| R-FedProx | Yes | Yes | `configs/icassp_2x2_r_fedprox.yaml` |
+| U-FedAvg | No | No | `configs/fedsam3_2x2_u_fedavg.yaml` |
+| U-FedProx | No | Yes | `configs/fedsam3_2x2_u_fedprox.yaml` |
+| R-FedAvg | Yes | No | `configs/fedsam3_2x2_r_fedavg.yaml` |
+| R-FedProx | Yes | Yes | `configs/fedsam3_2x2_r_fedprox.yaml` |
 
 Fixed local task losses:
 
@@ -76,7 +76,7 @@ The ratio is defined at client level:
 The main 2x2 setting uses `image_only + multimodal`, giving `1/2`.
 The additional setting uses `text_only + image_only + multimodal`, giving `2/3`:
 
-`configs/icassp_ratio_2of3_r_fedprox.yaml`
+`configs/fedsam3_ratio_2of3_r_fedprox.yaml`
 
 The realized ratio is derived from the enabled client list and stored in the protocol metadata.
 
