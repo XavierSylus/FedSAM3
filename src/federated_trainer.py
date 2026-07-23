@@ -53,6 +53,10 @@ from src.update_diagnostics import (
     flatten_parameter_group_diagnostics,
 )
 from data.heterogeneous_dataset_loader import create_heterogeneous_data_loaders
+from data_processing.brats_region_contract import (
+    logits_to_brats_labels,
+    regions_to_brats_labels,
+)
 
 
 # ★ Fix Critical 2: 工厂函数 - 根据 modality 字符串实例化正确的 Trainer 子类
@@ -304,6 +308,29 @@ class FederatedTrainer:
         """文本辅助分割与是否解耦聚合解耦，避免 C 组把监督一并关掉。"""
         return bool(getattr(self.config, "enable_text_assist_in_seg", True))
 
+    def _segmentation_trainer_kwargs(self) -> Dict[str, Any]:
+        contract = {
+            "segmentation_loss": getattr(self.config, "segmentation_loss", None),
+            "seg_dice_weight": getattr(self.config, "seg_dice_weight", None),
+            "seg_bce_weight": getattr(self.config, "seg_bce_weight", None),
+            "seg_dice_smooth": getattr(self.config, "seg_dice_smooth", None),
+        }
+        missing = [name for name, value in contract.items() if value is None]
+        if missing:
+            raise ValueError(
+                f"segmentation training contract is incomplete: missing {missing}"
+            )
+        if int(getattr(self.config, "num_classes", 0)) != 3:
+            raise ValueError("BraTS segmentation requires num_classes=3")
+
+        thresholds = getattr(self.config, "segmentation_thresholds", None)
+        if thresholds is None or len(thresholds) != 3:
+            raise ValueError(
+                "segmentation inference contract requires thresholds for [WT, TC, ET]"
+            )
+        contract["segmentation_thresholds"] = tuple(thresholds)
+        return contract
+
     def _select_client_initial_state(
         self,
         round_global_state: Dict[str, torch.Tensor],
@@ -374,6 +401,13 @@ class FederatedTrainer:
             ),
             "strict_protocol_check": bool(getattr(self.config, "strict_protocol_check", True)),
             "proxy_client_id": getattr(self.config, "proxy_client_id", None),
+            "segmentation": {
+                "loss": getattr(self.config, "segmentation_loss", None),
+                "dice_weight": getattr(self.config, "seg_dice_weight", None),
+                "bce_weight": getattr(self.config, "seg_bce_weight", None),
+                "smooth": getattr(self.config, "seg_dice_smooth", None),
+                "thresholds": getattr(self.config, "segmentation_thresholds", None),
+            },
             "data_root": str(getattr(self.config, "data_root", "")),
             "clients": client_entries,
             "missing_modality_client_ratio": self._missing_modality_client_ratio(
@@ -548,6 +582,7 @@ class FederatedTrainer:
         self.client_trainers = {}
         allow_text_param_upload = self._should_allow_text_param_upload()
         enable_text_assist_in_seg = self._should_enable_text_assist_in_seg()
+        segmentation_kwargs = self._segmentation_trainer_kwargs()
         for client_id, cfg in self.client_configs.items():
             # ★ Fix Critical 2: 使用工厂函数，根据模态实例化对应子类
             self.client_trainers[client_id] = create_client_trainer(
@@ -564,6 +599,7 @@ class FederatedTrainer:
                 allow_text_param_upload=allow_text_param_upload,
                 baseline_method=getattr(self.config, 'baseline_method', 'none'),
                 fedprox_mu=getattr(self.config, 'fedprox_mu', 0.0),
+                **segmentation_kwargs,
             )
 
         self._materialize_runtime_trainable_modules()
@@ -1748,6 +1784,9 @@ class FederatedTrainer:
         """保存分割掩码到文件"""
         save_dir.mkdir(parents=True, exist_ok=True)
         model.eval()
+        thresholds = getattr(self.config, "segmentation_thresholds", None)
+        if thresholds is None:
+            raise ValueError("segmentation thresholds are required to save masks")
         
         saved_count = 0
         with torch.no_grad():
@@ -1773,6 +1812,13 @@ class FederatedTrainer:
                 # 处理模型返回字典的情况
                 if isinstance(pred, dict):
                     pred = pred.get('logits', pred.get('out', list(pred.values())[0]))
+
+                pred_labels = logits_to_brats_labels(
+                    pred,
+                    thresholds=thresholds,
+                    channel_dim=1,
+                )
+                true_labels = regions_to_brats_labels(masks, channel_dim=1)
                 
                 # 处理每个样本
                 batch_size = images.shape[0]
@@ -1780,35 +1826,8 @@ class FederatedTrainer:
                     if saved_count >= max_samples:
                         break
                     
-                    # 获取预测掩码（与验证口径一致：WT channel=1）
-                    wt_channel_idx = 1
-                    if pred.dim() == 4:
-                        if pred.shape[1] > wt_channel_idx:
-                            pred_probs = torch.sigmoid(pred[i, wt_channel_idx]).cpu().numpy()
-                            pred_mask = (pred_probs > 0.5).astype(np.uint8)
-                        elif pred.shape[1] == 1:
-                            pred_probs = torch.sigmoid(pred[i, 0]).cpu().numpy()
-                            pred_mask = (pred_probs > 0.5).astype(np.uint8)
-                        else:
-                            continue
-                    else:
-                        pred_probs = torch.sigmoid(pred[i]).cpu().numpy()
-                        pred_mask = (pred_probs > 0.5).astype(np.uint8)
-
-                    # 获取真实掩码（与验证口径一致：WT channel=1）
-                    if masks.dim() == 4:
-                        if masks.shape[1] > wt_channel_idx:
-                            true_mask = (masks[i, wt_channel_idx].cpu().numpy() > 0.5).astype(np.uint8)
-                        elif masks.shape[1] == 1:
-                            true_mask = (masks[i, 0].cpu().numpy() > 0.5).astype(np.uint8)
-                        else:
-                            continue
-                    else:
-                        true_mask = (masks[i].cpu().numpy() > 0.5).astype(np.uint8)
-                    
-                    # 转换为0-255的uint8格式
-                    pred_mask_uint8 = (pred_mask * 255).astype(np.uint8)
-                    true_mask_uint8 = (true_mask * 255).astype(np.uint8)
+                    pred_mask_uint8 = pred_labels[i].cpu().numpy().astype(np.uint8)
+                    true_mask_uint8 = true_labels[i].cpu().numpy().astype(np.uint8)
                     
                     # 保存预测掩码
                     pred_img = Image.fromarray(pred_mask_uint8, mode='L')
