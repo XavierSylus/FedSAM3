@@ -7,6 +7,8 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
+from data_processing.brats_region_contract import brats_labels_to_regions
+
 try:
     import nibabel as nib
 
@@ -270,10 +272,7 @@ class HeterogeneousBraTSDataset(Dataset):
             mode="nearest",
         ).squeeze(0).squeeze(0).long()
 
-        channel0 = (mask == 0).float()
-        channel1 = (mask > 0).float()
-        channel2 = (mask == 4).float()
-        return torch.stack([channel0, channel1, channel2], dim=0)
+        return brats_labels_to_regions(mask)
 
 
 def heterogeneous_collate_fn(batch, client_type: str):
