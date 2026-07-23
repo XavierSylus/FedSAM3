@@ -67,9 +67,12 @@ def _router(
 def test_parameter_group_classifier_matches_router_contract():
     assert classify_parameter("text_adapter.down.weight") == TEXT_ADAPTER
     assert classify_parameter("adapters.0.down.weight") == VISION_ADAPTER
+    assert classify_parameter("_sam3_adapter_conv.weight") == VISION_ADAPTER
+    assert classify_parameter("_mock_adapter_conv.weight") == VISION_ADAPTER
     assert classify_parameter("fusion_head.text_proj.weight") == TEXT_PARAMS
     assert classify_parameter("fusion_head._text_projection.weight") == FUSION_PARAMS
     assert classify_parameter("fusion_head._fusion_gate.0.weight") == FUSION_PARAMS
+    assert classify_parameter("text_prompt_encoder.down_proj.weight") == FUSION_PARAMS
     assert classify_parameter("medical_seg_head.weight") == IMAGE_PARAMS
     with pytest.raises(ValueError, match="Unclassified"):
         classify_parameter("unknown_module.weight")
@@ -196,6 +199,11 @@ class TestADARouterV2:
         assert 'text_only' not in participants
         print(f"  ✓ _output_conv 聚合池: {participants}")
 
+    def test_sam3_output_adapter_excludes_text_only(self):
+        """SAM3 输出适配层属于视觉侧，text_only 不参与。"""
+        participants = self._route('_sam3_adapter_conv.weight')
+        assert participants == {'image_only', 'multimodal'}
+
     # ─────────────────────────────────────────────────────────────────────────
     # 测试 3：视觉 Adapter 物理隔离（关键修改验证）
     # ─────────────────────────────────────────────────────────────────────────
@@ -283,6 +291,11 @@ class TestADARouterV2:
     def test_fusion_parameters_only_accept_multimodal_client(self):
         participants = self._route("fusion_head._fusion_gate.0.weight")
         assert participants == {"multimodal"}
+
+        prompt_participants = self._route(
+            "text_prompt_encoder.down_proj.weight"
+        )
+        assert prompt_participants == {"multimodal"}
 
     # ─────────────────────────────────────────────────────────────────────────
     # 测试 7：安全守卫——无合格客户端返回空列表

@@ -42,6 +42,7 @@ class FederatedOutput:
 # Import SAM3 components
 from sam3.model_builder import build_sam3_image_model
 from sam3.model.sam3_image import Sam3Image
+from sam3.model.geometry_encoders import Prompt
 from sam3.model.data_misc import (
     BatchedDatapoint,
     BatchedFindTarget,
@@ -632,7 +633,7 @@ class MultimodalFusionHead(nn.Module):
 # ============================================================================
 class TextPromptEncoder(nn.Module):
     """将联邦服务器下发的全局文本表征 global_text_rep 转换为
-    SAM3 Mask Decoder 所期待的 sparse_prompt_token (B, 1, embed_dim)。
+    Sam3Image 原生语言提示通道所期待的 token (B, 1, hidden_dim)。
     up_proj 零初始化：初始期等价纯视觉基线，梯度逐步引入跨模态知识。
     """
 
@@ -663,6 +664,17 @@ class TextPromptEncoder(nn.Module):
             g = global_text_rep.unsqueeze(0).expand(batch_size, -1).contiguous()
         else:
             g = global_text_rep.contiguous()
+        if g.dim() != 2 or g.shape[0] != batch_size:
+            raise ValueError(
+                "Global text representation must have shape (D,) or (B, D): "
+                f"received {tuple(global_text_rep.shape)}, batch_size={batch_size}"
+            )
+        expected_dim = self.down_proj.in_features
+        if g.shape[1] != expected_dim:
+            raise ValueError(
+                "Global text representation dimension differs from prompt contract: "
+                f"actual={g.shape[1]}, expected={expected_dim}"
+            )
         g = g.to(device=device, dtype=dtype)
         token = self.up_proj(self.act(self.down_proj(g)))
         return token.unsqueeze(1)
@@ -828,10 +840,12 @@ class SAM3MedicalIntegrated(nn.Module):
             self.adapter_manager._rope_pre_hook
         )
 
-        # text_prompt_encoder：将 global_text_rep 投影为 SAM3 Mask Decoder 的 sparse_prompt_token
+        prompt_embed_dim = (
+            self.sam3_model.hidden_dim if self.use_real_sam3 else self.embed_dim
+        )
         self.text_prompt_encoder = TextPromptEncoder(
-            text_dim=text_dim,
-            embed_dim=self.embed_dim,
+            text_dim=contrastive_dim,
+            embed_dim=prompt_embed_dim,
             bottleneck_dim=256,
         )
 
@@ -969,11 +983,16 @@ class SAM3MedicalIntegrated(nn.Module):
             import numpy as np
             out_ch = logits.shape[1]
             conv = getattr(self, adapter_attr, None)
-            if conv is None or conv.in_channels != out_ch:
+            if conv is None:
                 conv = nn.Conv2d(out_ch, self.num_classes, kernel_size=1, bias=True).to(logits.device)
                 nn.init.xavier_uniform_(conv.weight)
                 nn.init.constant_(conv.bias, np.log(0.01 / 0.99))
                 setattr(self, adapter_attr, conv)
+            elif conv.in_channels != out_ch:
+                raise RuntimeError(
+                    f"{adapter_attr} input channel contract changed after initialization: "
+                    f"expected {conv.in_channels}, got {out_ch}"
+                )
             logits = conv(logits)
         assert logits.shape[1] == self.num_classes, (
             f"本地适配层输出通道数错误！期望 {self.num_classes}，实际 {logits.shape[1]}"
@@ -987,7 +1006,7 @@ class SAM3MedicalIntegrated(nn.Module):
         return final_logits
 
     # ====================================================================
-    # forward 路由（原逻辑完全不变）
+    # forward 路由
     # ====================================================================
 
     def forward(
@@ -996,14 +1015,13 @@ class SAM3MedicalIntegrated(nn.Module):
         return_features: bool = False,
         text_features: Optional[torch.Tensor] = None,
         global_text_rep: Optional[torch.Tensor] = None,
-        **kwargs,
     ) -> Dict[str, torch.Tensor]:
         """
         Args:
             images:          输入图像 (B, C, H, W)
             return_features: 是否返回中间特征
-            text_features:   当前批次原始文本特征（早期融合，GatedFusion）
-            global_text_rep: 服务器下发的全局文本表征 (D,)，调用前已 .detach()
+            text_features:   当前批次私有文本特征
+            global_text_rep: 服务器下发的 1024 维全局文本代理
         """
         if self.use_real_sam3:
             result = self._forward_real_sam3(images, return_features, text_features, global_text_rep)
@@ -1068,7 +1086,10 @@ class SAM3MedicalIntegrated(nn.Module):
     ) -> FederatedOutput:
         self.sam3_model.eval()
         logits, features = self._forward_real_sam3_standard_with_prompt(
-            images, return_features, global_text_rep
+            images,
+            return_features,
+            text_features,
+            global_text_rep,
         )
         if logits.shape[-2:] != images.shape[-2:]:
             logits = F.interpolate(logits, size=images.shape[-2:], mode='bilinear', align_corners=False)
@@ -1080,58 +1101,120 @@ class SAM3MedicalIntegrated(nn.Module):
         self,
         images: torch.Tensor,
         return_features: bool,
+        text_features: Optional[torch.Tensor],
         global_text_rep: Optional[torch.Tensor] = None,
     ):
-        """
-        直连 Mask Decoder 注入路径。
+        if text_features is None and global_text_rep is None:
+            return self._forward_real_sam3_standard(images, return_features)
 
-        当 global_text_rep 不为 None 时：
-          1. 先跑完整 SAM3 前向拿到 image features（backbone 输出的中间特征）
-          2. 用 text_prompt_encoder 生成 sparse_embeddings (B, 1, 256)
-          3. 调 _call_mask_decoder 用 sparse_embeddings 重推 logits
-        当 global_text_rep 为 None 时，直接返回标准前向结果。
-
-          此处不再执行截断（职责单一原则）。
-        """
-        # 标准 SAM3 完整前向（拿 features / logits）
-        logits, features = self._forward_real_sam3_standard(images, return_features=True)
-
-        if global_text_rep is None:
-            return logits, features
-
-        # text_prompt_encoder 生成 sparse_embeddings (B, 1, 256)
-        B = images.shape[0]
-        sparse_embeddings = self.text_prompt_encoder(
+        logits = self._forward_real_sam3_with_external_text(
+            images=images,
+            text_features=text_features,
             global_text_rep=global_text_rep,
-            batch_size=B,
-            device=images.device,
-            dtype=images.dtype,
-        )  # (B, 1, 256)
+        )
+        features = None
+        if return_features:
+            _, features = self._forward_real_sam3_standard(
+                images, return_features=True
+            )
+        return logits, features
 
-        # 构造 dense_embeddings 占位符
-        ref_h = images.shape[2] // 16
-        ref_w = images.shape[3] // 16
-        dense_embeddings = torch.zeros(
-            (B, 256, ref_h, ref_w), dtype=images.dtype, device=images.device
+    def _forward_real_sam3_with_external_text(
+        self,
+        images: torch.Tensor,
+        text_features: Optional[torch.Tensor],
+        global_text_rep: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        batch_size = images.shape[0]
+        prompt_tokens = []
+
+        if text_features is not None:
+            local_text = text_features
+            if local_text.dim() == 3:
+                local_text = local_text.mean(dim=1)
+            if local_text.dim() != 2 or local_text.shape[0] != batch_size:
+                raise ValueError(
+                    "Private text features must have shape (B, D): "
+                    f"received {tuple(text_features.shape)}"
+                )
+            local_text = local_text.to(device=images.device, dtype=images.dtype)
+            local_contrastive = self.fusion_head.project_text(local_text)
+            prompt_tokens.append(
+                self.text_prompt_encoder(
+                    global_text_rep=local_contrastive,
+                    batch_size=batch_size,
+                    device=images.device,
+                    dtype=images.dtype,
+                )
+            )
+
+        if global_text_rep is not None:
+            prompt_tokens.append(
+                self.text_prompt_encoder(
+                    global_text_rep=global_text_rep,
+                    batch_size=batch_size,
+                    device=images.device,
+                    dtype=images.dtype,
+                )
+            )
+
+        if not prompt_tokens:
+            raise RuntimeError(
+                "External text forward requires local or global text features"
+            )
+
+        language_tokens = torch.cat(prompt_tokens, dim=1)
+        expected_hidden_dim = int(self.sam3_model.hidden_dim)
+        if language_tokens.shape[2] != expected_hidden_dim:
+            raise RuntimeError(
+                "External language token dimension differs from Sam3Image.hidden_dim: "
+                f"actual={language_tokens.shape[2]}, expected={expected_hidden_dim}"
+            )
+
+        batched_input = self._to_batched_datapoint(images)
+        self._sanitize_batched_input(batched_input, images.device)
+        find_input = batched_input.find_inputs[0]
+        find_target = batched_input.find_targets[0]
+        find_input.text_ids = torch.arange(
+            batch_size, dtype=torch.long, device=images.device
         )
 
-        # 用 image features 直接调 mask_decoder，覆盖 logits
-        # features 来自 _forward_real_sam3_standard 的 final_results.get('features', None)
-        # 若 features 为 None（SAM3 未导出特征图），不进行重推，保留标准 logits
-        if features is not None:
-            try:
-                logits = self._call_mask_decoder(features, sparse_embeddings, dense_embeddings)
-                logger.debug(
-                    "[TextPromptInjection] mask_decoder 重推成功，"
-                    "sparse_embeddings.shape=%s, new_logits.shape=%s",
-                    sparse_embeddings.shape, logits.shape,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "[TextPromptInjection] _call_mask_decoder 失败，回退到标准 logits: %s", exc
-                )
+        backbone_out = {"img_batch_all_stages": batched_input.img_batch}
+        backbone_out.update(
+            self.sam3_model.backbone.forward_image(batched_input.img_batch)
+        )
+        backbone_out["language_features"] = (
+            language_tokens.permute(1, 0, 2).contiguous()
+        )
+        backbone_out["language_mask"] = torch.zeros(
+            batch_size,
+            language_tokens.shape[1],
+            dtype=torch.bool,
+            device=images.device,
+        )
+        backbone_out["language_embeds"] = None
 
-        return logits, features
+        geometric_prompt = Prompt(
+            box_embeddings=find_input.input_boxes,
+            box_mask=find_input.input_boxes_mask,
+            box_labels=find_input.input_boxes_label,
+        )
+        final_results = self.sam3_model.forward_grounding(
+            backbone_out=backbone_out,
+            find_input=find_input,
+            find_target=find_target,
+            geometric_prompt=geometric_prompt,
+        )
+
+        logits = final_results.get(
+            "semantic_seg", final_results.get("pred_masks")
+        )
+        if not isinstance(logits, torch.Tensor) or logits.dim() != 4:
+            raise ValueError(
+                "Sam3Image.forward_grounding must return a 4D segmentation tensor: "
+                f"keys={sorted(final_results.keys())}"
+            )
+        return logits
 
     def _get_image_encoder(self) -> nn.Module:
         if hasattr(self.sam3_model, 'backbone'):
@@ -1143,162 +1226,6 @@ class SAM3MedicalIntegrated(nn.Module):
         if hasattr(self.sam3_model, 'image_encoder'):
             return self.sam3_model.image_encoder
         raise RuntimeError("无法找到 SAM3 Image Encoder！")
-
-    def _get_prompts_with_text_prior(
-        self,
-        images: torch.Tensor,
-        batch_size: int,
-        text_prompt: Optional[torch.Tensor] = None,
-    ):
-        """
-
-        将 global_text_rep 通过 TextPromptEncoder 投影为
-        sparse_prompt_embeddings (B, 1, embed_dim)，与原有空山 (B, 0, D) 相比
-        多了一个文本语义 token 参与 Mask Decoder cross-attention。
-
-        防御注意：
-          - text_prompt 应已在 client.py 侧 .detach()，这里不再做一次截断
-          - text_prompt=None 时回退为 (B,0,embed_dim)，完全向后兼容
-
-        PE 注意：
-          SAM Mask Decoder (mask_decoder.py L194) 直接
-            tokens = cat([output_tokens, sparse_prompt_embeddings], dim=1)
-          sparse_prompt_embeddings 未加任何位置编码，纯语义 token 参与 attention 安全。
-        """
-        # 文本 Prompt Token 生成
-        sparse_embeddings = self.text_prompt_encoder(
-            global_text_rep=text_prompt,
-            batch_size=batch_size,
-            device=images.device,
-            dtype=images.dtype,
-        )  # (B, 1, embed_dim) 或 (B, 0, embed_dim)
-
-        # Dense PE（原逻辑不变）
-        dense_embeddings = None
-        prompt_encoder = getattr(self.sam3_model, 'prompt_encoder', None)
-        if prompt_encoder is None and hasattr(self.sam3_model, 'transformer'):
-            prompt_encoder = getattr(self.sam3_model.transformer, 'prompt_encoder', None)
-        if prompt_encoder is not None and hasattr(prompt_encoder, 'get_dense_pe'):
-            try:
-                dense_embeddings = prompt_encoder.get_dense_pe()
-                if dense_embeddings.dim() == 3:
-                    dense_embeddings = dense_embeddings.unsqueeze(0).expand(batch_size, -1, -1, -1)
-            except Exception as exc:
-                logger.debug("get_dense_pe failed (fallback): %s", exc)
-
-        # 兼容 SAM3 多尺度特征金字塔 (List)
-        if dense_embeddings is None:
-            # 从 images 本身推断参考形状，避免依赖 fused_embeddings（此时可能尚未计算）
-            # image_pe 在 dense prompt 为空时应使用 prompt_encoder 的位置编码尺寸，
-            # 退而求其次用全零张量（B, 256, H/4, W/4）作为占位符。
-            # 典型 SAM2/SAM3：image_size=1024 → feature map 64x64
-            ref_h = images.shape[2] // 16
-            ref_w = images.shape[3] // 16
-            dense_embeddings = torch.zeros(
-                (batch_size, 256, ref_h, ref_w),
-                dtype=images.dtype,
-                device=images.device,
-            )
-            logger.debug(
-                "dense_embeddings 回退为全零占位符 (B=%d, 256, %d, %d)",
-                batch_size, ref_h, ref_w,
-            )
-
-        return sparse_embeddings, dense_embeddings
-
-    def _call_mask_decoder(self, fused_embeddings, sparse_embeddings, dense_embeddings):
-        _SAM_DECODER_NAMES = {
-            'MaskDecoder', 'SAMMaskDecoder', 'SAM2MaskDecoder',
-            'SAM3MaskDecoder', 'MemoryAttentionDecoder',
-        }
-
-        def _is_sam_decoder(module) -> bool:
-            """返回 True 仅当 module 是真正的 SAM Mask Decoder（非 torch.nn 内置）。"""
-            if module is None:
-                return False
-            cls_name = type(module).__name__
-            # 类名白名单：必须命中 SAM 相关名称
-            if any(name in cls_name for name in _SAM_DECODER_NAMES):
-                return True
-            # 备用：检测是否具备 SAM MaskDecoder 特有属性
-            sam_attrs = {'output_hypernetworks_mlps', 'iou_prediction_head',
-                         'mask_tokens', 'output_upscaling', 'upsample4'}
-            if any(hasattr(module, attr) for attr in sam_attrs):
-                return True
-            return False
-
-        # 1. 最优先：sam3_model.mask_decoder（若为真正 SAM Decoder）
-        candidate = getattr(self.sam3_model, 'mask_decoder', None)
-        mask_decoder = candidate if _is_sam_decoder(candidate) else None
-
-        # 2. 遍历 sam3_model 所有直接子模块，查找 SAM Decoder
-        if mask_decoder is None:
-            for name, mod in self.sam3_model.named_modules():
-                if _is_sam_decoder(mod):
-                    mask_decoder = mod
-                    logger.debug("_call_mask_decoder: 从子模块 '%s' 找到 SAM Decoder (%s)",
-                                 name, type(mod).__name__)
-                    break
-
-        # 3. 最后回退：任何 mask_decoder / decoder 属性（但禁止 torch.nn.TransformerDecoder）
-        if mask_decoder is None:
-            for attr_path in ['mask_decoder', 'decoder']:
-                obj = self.sam3_model
-                for part in attr_path.split('.'):
-                    obj = getattr(obj, part, None)
-                    if obj is None:
-                        break
-                if obj is not None and not isinstance(obj, nn.TransformerDecoder):
-                    mask_decoder = obj
-                    logger.warning(
-                        "_call_mask_decoder: 回退到 attr '%s' (%s)，请确认其为 SAM Decoder。",
-                        attr_path, type(obj).__name__,
-                    )
-                    break
-
-        if mask_decoder is None:
-            raise RuntimeError("无法找到 SAM3 Mask Decoder（TransformerDecoder 已被排除）！")
-
-        def _parse(out):
-            if isinstance(out, tuple): return out[0]
-            if isinstance(out, dict): return out.get('masks', out.get('pred_masks'))
-            return out
-
-        # 兼容 SAM3 多尺度特征金字塔 (List)
-        # 若 dense_embeddings 在此处仍意外为 None，从 fused_embeddings 安全提取参考张量
-        if dense_embeddings is None:
-            if isinstance(fused_embeddings, list):
-                # 提取 FPN 列表中的主特征图（索引0 = 最大空间分辨率）
-                ref_tensor = fused_embeddings[0]
-                logger.debug(
-                    "_call_mask_decoder: fused_embeddings 是 FPN list（共 %d 层），"
-                    "使用 index=0 作为参考张量，shape=%s",
-                    len(fused_embeddings), list(ref_tensor.shape),
-                )
-            else:
-                ref_tensor = fused_embeddings
-            B, _, H, W = ref_tensor.shape
-            # SAM 系列标准的 prompt_embed_dim 通常为 256
-            # 不要用 zeros_like，手动对齐 Batch、Dim 和 Device
-            dense_embeddings = torch.zeros(
-                (B, 256, H, W),
-                dtype=ref_tensor.dtype,
-                device=ref_tensor.device,
-            )
-            logger.debug(
-                "_call_mask_decoder: dense_embeddings 补零 (B=%d, 256, %d, %d)", B, H, W,
-            )
-
-        image_pe = dense_embeddings
-
-        return _parse(mask_decoder(
-            image_embeddings=fused_embeddings,
-            image_pe=image_pe,
-            sparse_prompt_embeddings=sparse_embeddings,
-            dense_prompt_embeddings=dense_embeddings,
-            multimask_output=False,
-        ))
-
 
     def _forward_real_sam3_standard(self, images, return_features):
         batched_input = self._to_batched_datapoint(images, text_features=None)
@@ -1520,6 +1447,10 @@ class SAM3MedicalIntegrated(nn.Module):
                 trainable_params.extend(list(adapter.parameters()))
         trainable_params.extend(list(self.fusion_head.parameters()))
         trainable_params.extend(list(self.text_prompt_encoder.parameters()))
+        for adapter_attr in ("_sam3_adapter_conv", "_mock_adapter_conv"):
+            output_adapter = getattr(self, adapter_attr, None)
+            if output_adapter is not None:
+                trainable_params.extend(list(output_adapter.parameters()))
         if hasattr(self, '_output_conv') and self._output_conv is not None:
             trainable_params.extend(list(self._output_conv.parameters()))
         if hasattr(self, 'medical_seg_head') and self.medical_seg_head is not None:

@@ -232,6 +232,7 @@ class SAM3_Medical(nn.Module):
         super(SAM3_Medical, self).__init__()
         self.img_size = img_size
         self.embed_dim = embed_dim
+        self.contrastive_dim = embed_dim
         self.decoder_dim = decoder_dim
         self.num_classes = num_classes
         self.use_text_fusion = use_text_fusion
