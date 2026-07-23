@@ -1,9 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import pytest
 
 from src.client import TextOnlyTrainer
 from src.cream_losses import PrototypeLogisticTextLoss
+from src.config_manager import FederatedConfig
 
 
 class _TinyFusionHead(nn.Module):
@@ -110,3 +112,31 @@ def test_text_projection_has_gradient_delta_and_upload_key():
         - before["fusion_head.text_proj.weight"],
         delta.cpu(),
     )
+
+
+def test_text_client_requires_explicit_text_supervision_contract():
+    clients = [
+        {
+            "client_id": "client_1",
+            "modality": "text_only",
+            "data_source": "unused.json",
+            "enabled": True,
+        }
+    ]
+
+    with pytest.raises(ValueError, match="text_supervision"):
+        FederatedConfig(
+            clients=clients,
+            device="cpu",
+            use_mock=True,
+        )
+
+    config = FederatedConfig(
+        clients=clients,
+        text_loss_name="prototype_logistic",
+        text_loss_temperature=0.2,
+        device="cpu",
+        use_mock=True,
+    )
+    assert config.text_loss_name == "prototype_logistic"
+    assert config.text_loss_temperature == 0.2
