@@ -19,6 +19,66 @@ import numpy as np
 from data_processing.brats_region_contract import REGION_NAMES
 
 
+class PrototypeLogisticTextLoss(nn.Module):
+    """
+    Align projected private text features with one detached round-global prototype.
+
+    For projected text features ``h_i`` and prototype ``g_t``:
+        z_i = normalize(h_i)
+        L_text = mean(softplus(-cos(z_i, g_t) / temperature))
+    """
+
+    def __init__(self, temperature: float):
+        super().__init__()
+        temperature = float(temperature)
+        if not math.isfinite(temperature) or temperature <= 0.0:
+            raise ValueError("text loss temperature must be finite and greater than zero")
+        self.temperature = temperature
+
+    def forward(
+        self,
+        projected_text: torch.Tensor,
+        global_text_prototype: torch.Tensor,
+    ) -> torch.Tensor:
+        if projected_text.ndim != 2:
+            raise ValueError(
+                "projected_text must have shape [B, D], "
+                f"got {tuple(projected_text.shape)}"
+            )
+        if global_text_prototype.ndim != 1:
+            raise ValueError(
+                "global_text_prototype must have shape [D], "
+                f"got {tuple(global_text_prototype.shape)}"
+            )
+        if projected_text.shape[1] != global_text_prototype.shape[0]:
+            raise ValueError(
+                "text projection and prototype dimensions must match, "
+                f"got {projected_text.shape[1]} and "
+                f"{global_text_prototype.shape[0]}"
+            )
+        if not projected_text.is_floating_point():
+            raise TypeError("projected_text must use a floating dtype")
+        if not global_text_prototype.is_floating_point():
+            raise TypeError("global_text_prototype must use a floating dtype")
+        if projected_text.device != global_text_prototype.device:
+            raise ValueError("projected_text and global_text_prototype must share a device")
+        if not torch.isfinite(projected_text).all():
+            raise ValueError("projected_text must contain only finite values")
+        if not torch.isfinite(global_text_prototype).all():
+            raise ValueError("global_text_prototype must contain only finite values")
+        if torch.any(torch.linalg.vector_norm(projected_text.float(), dim=1) <= 1e-12):
+            raise ValueError("every projected text sample must have non-zero norm")
+        if torch.linalg.vector_norm(global_text_prototype.float()).item() <= 1e-12:
+            raise ValueError("global_text_prototype must have non-zero norm")
+
+        normalized_text = F.normalize(projected_text.float(), p=2, dim=1)
+        normalized_prototype = F.normalize(
+            global_text_prototype.detach().float(), p=2, dim=0
+        )
+        cosine = normalized_text @ normalized_prototype
+        return F.softplus(-cosine / self.temperature).mean()
+
+
 class ContrastiveLoss(nn.Module):
     """
     CreamFL 对比学习损失（核心机制）
