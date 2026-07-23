@@ -1,0 +1,59 @@
+iteration_id: phase-1e-a-20260724-001
+base_commit: deea3b80db8a797ba9c4efde46a834b54b6f296f
+target_remote: origin
+target_branch: main
+scope:
+  requirement_ids:
+    - 1E-1
+    - 1J
+  files_to_modify:
+    - src/client.py
+    - src/federated_trainer.py
+  files_to_add:
+    - tests/test_optimizer_upload_contract.py
+    - docs/iterations/phase-1e-a-20260724-001.yaml
+  files_to_delete: []
+  approved_file_limit_exception: user-approved iteration record in addition to the three implementation files
+contracts_affected:
+  - client upload keys equal explicitly named optimizer parameters
+  - FedProx parameter set equals the client optimizer parameter set
+  - upload payload excludes buffers and non-optimizer parameters
+data_flow:
+  input:
+    - model.named_parameters()
+    - optimizer.param_groups
+    - round-global named-parameter snapshot
+  transformation:
+    - map each optimizer parameter object to one registered model parameter name
+    - validate the mapping is unique and contains no buffer or unregistered parameter
+    - use that named set as both upload and FedProx scope
+  output:
+    - client upload dictionary keyed exactly by optimizer parameter names
+    - optimizer-name set used by FedProx
+side_effects:
+  - image-only keyword-based text upload toggles are removed
+  - unsupported optimizer parameters fail fast before local training
+  - server aggregation semantics remain unchanged until phase 1E-B
+acceptance_tests:
+  - text-only upload equals its optimizer named parameter set
+  - image-only upload equals its optimizer named parameter set
+  - multimodal upload equals its optimizer named parameter set
+  - buffers and trainable non-optimizer parameters are excluded
+  - every upload key has a finite delta against the round-global parameter snapshot
+  - FedProx scope equals the optimizer named parameter set
+static_validation:
+  - Python AST parsing for modified and added Python files
+  - source-level contract assertions for optimizer scope activation and uploads
+  - YAML parsing and required iteration-record fields
+  - git diff whitespace check
+  - no local test execution, training, smoke run, model forward, or model backward
+known_followups:
+  - tests/test_experiment_protocol.py encodes the removed allow_text_param_upload behavior and requires phase 1M migration
+  - tests/test_fedprox_proxy_contract.py encodes the superseded training-registry upload rule and requires phase 1M migration
+local_prohibited_actions:
+  - training
+  - smoke_run
+  - model_forward
+  - model_backward
+backup_tag: backup/pre-phase-1e-a-20260724-001
+status: STATIC_VALIDATED
