@@ -8,10 +8,16 @@ IMAGE_PARAMS = "IMAGE_PARAMS"
 FUSION_PARAMS = "FUSION_PARAMS"
 
 TEXT_ADAPTER_KEYWORDS = ("text_adapter",)
-VISION_ADAPTER_KEYWORDS = ("adapters.", "wrapped_blocks.", "lora")
+VISION_ADAPTER_KEYWORDS = (
+    "adapters.",
+    "wrapped_blocks.",
+    "lora",
+    "_adapter_conv",
+)
 FUSION_PARAM_KEYWORDS = (
     "fusion_head._text_projection",
     "fusion_head._fusion_gate",
+    "text_prompt_encoder",
 )
 TEXT_PARAM_KEYWORDS = ("text_encoder", "text_proj")
 IMAGE_PARAM_KEYWORDS = (
@@ -25,7 +31,6 @@ IMAGE_PARAM_KEYWORDS = (
     "image_proj",
     "_output_conv",
     "medical_seg_head",
-    "text_prompt_encoder",
 )
 
 _TEXT_MODALITIES: FrozenSet[str] = frozenset({"text_only", "multimodal"})

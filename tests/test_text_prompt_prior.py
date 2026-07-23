@@ -14,13 +14,33 @@ Step 3 TextPromptEncoder 单元测试
   8. SAM3MedicalIntegrated.forward 新签名向后兼容（无 text_prompt 不崩溃）
 """
 
-import sys
+import ast
 import os
+import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import torch
 import torch.nn as nn
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CLIENT_PATH = PROJECT_ROOT / "src" / "client.py"
+MODEL_PATH = PROJECT_ROOT / "src" / "integrated_model.py"
+
+
+def _class_method(path: Path, class_name: str, method_name: str) -> ast.FunctionDef:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    class_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == class_name
+    )
+    return next(
+        node
+        for node in class_node.body
+        if isinstance(node, ast.FunctionDef) and node.name == method_name
+    )
 
 # ─────────────────────────────────────────────
 # 导入被测模块
@@ -166,6 +186,57 @@ def test_forward_backward_compat():
           f"shape={out_none.shape}")
     check("向后兼容：None → 非 None（正常 tensor）",
           isinstance(out_none, torch.Tensor))
+
+
+def test_multimodal_client_uses_explicit_global_text_argument():
+    compute_loss = _class_method(
+        CLIENT_PATH,
+        "MultimodalTrainer",
+        "compute_loss",
+    )
+    source = ast.unparse(compute_loss)
+
+    assert "global_text_rep=text_prompt_val" in source
+    assert "text_prompt=text_prompt_val" not in source
+
+
+def test_real_sam3_uses_native_language_prompt_path():
+    initializer = _class_method(
+        MODEL_PATH,
+        "SAM3MedicalIntegrated",
+        "__init__",
+    )
+    native_forward = _class_method(
+        MODEL_PATH,
+        "SAM3MedicalIntegrated",
+        "_forward_real_sam3_with_external_text",
+    )
+    initializer_source = ast.unparse(initializer)
+    native_source = ast.unparse(native_forward)
+
+    assert "text_dim=contrastive_dim" in initializer_source
+    assert "self.sam3_model.hidden_dim" in initializer_source
+    assert "embed_dim=prompt_embed_dim" in initializer_source
+    assert "find_input.text_ids" in native_source
+    assert "language_features" in native_source
+    assert "language_mask" in native_source
+    assert "backbone.forward_image" in native_source
+    assert "forward_grounding" in native_source
+
+
+def test_invalid_mask_decoder_injection_path_is_removed():
+    tree = ast.parse(MODEL_PATH.read_text(encoding="utf-8"))
+    model_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+        and node.name == "SAM3MedicalIntegrated"
+    )
+    method_names = {
+        node.name for node in model_class.body if isinstance(node, ast.FunctionDef)
+    }
+
+    assert "_call_mask_decoder" not in method_names
 
 
 # ═══════════════════════════════════════════════════════

@@ -1,11 +1,17 @@
 import ast
 from pathlib import Path
 
+import torch
+import torch.nn as nn
+
+from src.client import BaseClientTrainer
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CLIENT_PATH = PROJECT_ROOT / "src" / "client.py"
 TRAINER_PATH = PROJECT_ROOT / "src" / "federated_trainer.py"
 MODEL_PATH = PROJECT_ROOT / "src" / "integrated_model.py"
+SERVER_PATH = PROJECT_ROOT / "src" / "server.py"
 MAIN_PATH = PROJECT_ROOT / "main.py"
 PREFLIGHT_PATH = PROJECT_ROOT / "scripts" / "server_preflight.py"
 LAUNCHER_PATH = PROJECT_ROOT / "run_production_train.sh"
@@ -53,6 +59,23 @@ def test_round_uses_one_shared_fail_fast_proxy_for_all_clients():
     assert "global_text_rep" in source
 
 
+def test_server_proxy_uses_public_text_data_in_contrastive_space():
+    initializer = _class_method(SERVER_PATH, "CreamAggregator", "__init__")
+    proxy_builder = _class_method(
+        SERVER_PATH,
+        "CreamAggregator",
+        "generate_and_dispatch_global_proxies",
+    )
+    initializer_source = ast.unparse(initializer)
+    proxy_source = ast.unparse(proxy_builder)
+
+    assert "global_model.contrastive_dim" in initializer_source
+    assert "public_text_features" in proxy_source
+    assert "fusion_head.project_text(public_text_features)" in proxy_source
+    assert "self.global_text_rep.to(device)" not in proxy_source
+    assert "self.global_text_rep =" in proxy_source
+
+
 def test_missing_global_representations_never_fall_back_to_zero():
     method = _class_method(CLIENT_PATH, "BaseClientTrainer", "_prepare_global_reps")
     source = ast.unparse(method)
@@ -92,6 +115,66 @@ def test_upload_contains_only_named_trainable_parameters():
     assert "model.named_parameters()" in source
     assert "model.state_dict()" not in source
     assert "ALWAYS_INCLUDE_PREFIXES" not in source
+
+
+def test_upload_matches_model_trainable_registry():
+    class RegistryModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.optimized = nn.Linear(2, 1, bias=False)
+            self.requires_grad_but_not_optimized = nn.Parameter(torch.ones(1))
+
+        def get_trainable_params(self):
+            return list(self.optimized.parameters())
+
+    model = RegistryModel()
+
+    uploaded = BaseClientTrainer.get_model_state(object(), model)
+
+    assert set(uploaded) == {"optimized.weight"}
+
+
+def test_runtime_output_adapter_enters_trainable_registry():
+    get_trainable = _class_method(
+        MODEL_PATH,
+        "SAM3MedicalIntegrated",
+        "get_trainable_params",
+    )
+    source = ast.unparse(get_trainable)
+
+    assert "_sam3_adapter_conv" in source
+    assert "_mock_adapter_conv" in source
+
+
+def test_runtime_modules_are_materialized_before_client_state_cache():
+    setup_clients = _class_method(
+        TRAINER_PATH,
+        "FederatedTrainer",
+        "setup_clients",
+    )
+    calls = [
+        node
+        for node in ast.walk(setup_clients)
+        if isinstance(node, ast.Call)
+    ]
+    materialize_call = next(
+        node
+        for node in calls
+        if isinstance(node.func, ast.Attribute)
+        and node.func.attr == "_materialize_runtime_trainable_modules"
+    )
+    initial_state_assignment = next(
+        node
+        for node in ast.walk(setup_clients)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "initial_trainable_state"
+            for target in node.targets
+        )
+    )
+
+    assert materialize_call.lineno < initial_state_assignment.lineno
 
 
 def test_multimodal_text_representation_has_no_zero_fallback():

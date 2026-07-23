@@ -565,7 +565,9 @@ class FederatedTrainer:
                 baseline_method=getattr(self.config, 'baseline_method', 'none'),
                 fedprox_mu=getattr(self.config, 'fedprox_mu', 0.0),
             )
-        
+
+        self._materialize_runtime_trainable_modules()
+
         # ★ Fix Medium 5: 初始化本地表征使用 contrastive_dim 而非 embed_dim
         contrastive_dim = getattr(self.config, 'contrastive_dim', _CONTRASTIVE_DIM)
         print("[5/5] 初始化客户端状态缓存（CPU）...")
@@ -586,6 +588,66 @@ class FederatedTrainer:
             first_client_id = list(self.client_states.keys())[0]
             cache_size_mb = sum(p.numel() for p in self.client_states[first_client_id]['weights'].values()) * 4 / 1024 / 1024
             print(f"    - 每个客户端缓存大小: ~{cache_size_mb:.1f} MB (仅可训练参数)")
+
+    def _materialize_runtime_trainable_modules(self) -> None:
+        image_client = next(
+            (
+                cfg for cfg in self.client_configs.values()
+                if cfg.get("modality") in {"image_only", "multimodal"}
+            ),
+            None,
+        )
+        if image_client is None:
+            return
+
+        private_loader = image_client.get("private_loader")
+        if private_loader is None:
+            raise RuntimeError(
+                "Cannot initialize runtime output modules without an image private loader"
+            )
+        try:
+            batch = next(iter(private_loader))
+        except StopIteration as exc:
+            raise RuntimeError(
+                "Cannot initialize runtime output modules from an empty image loader"
+            ) from exc
+
+        if isinstance(batch, dict):
+            images = batch.get("image", batch.get("inp"))
+        elif isinstance(batch, (list, tuple)):
+            images = batch[0] if batch else None
+        else:
+            images = batch
+        if not isinstance(images, torch.Tensor) or images.ndim < 4:
+            raise RuntimeError(
+                "Image loader must provide a batched image tensor for model initialization"
+            )
+
+        was_training = self.global_model.training
+        try:
+            self.global_model.eval()
+            with torch.no_grad():
+                self.global_model(images[:1].to(self.device))
+        finally:
+            self.global_model.train(was_training)
+
+        registry_ids = {
+            id(parameter)
+            for parameter in self.global_model.get_trainable_params()
+        }
+        for adapter_attr in ("_sam3_adapter_conv", "_mock_adapter_conv"):
+            output_adapter = getattr(self.global_model, adapter_attr, None)
+            if output_adapter is None:
+                continue
+            missing = [
+                name
+                for name, parameter in output_adapter.named_parameters()
+                if id(parameter) not in registry_ids
+            ]
+            if missing:
+                raise RuntimeError(
+                    f"{adapter_attr} parameters missing from training registry: {missing}"
+                )
     
     def setup_validation(self):
         """准备验证集数据加载器"""

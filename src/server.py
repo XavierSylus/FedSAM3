@@ -48,12 +48,16 @@ class CreamAggregator:
         )
         self.distiller = None
 
-        embed_dim = global_model.embed_dim
+        representation_dim = int(global_model.contrastive_dim)
+        if representation_dim <= 0:
+            raise ValueError(
+                f"contrastive_dim must be positive, got {representation_dim}"
+            )
         self.global_text_rep = nn.functional.normalize(
-            torch.randn(embed_dim, device=device), p=2, dim=0
+            torch.randn(representation_dim, device=device), p=2, dim=0
         )
         self.global_image_rep = nn.functional.normalize(
-            torch.randn(embed_dim, device=device), p=2, dim=0
+            torch.randn(representation_dim, device=device), p=2, dim=0
         )
 
         # 梯度冲突角度（由 federated_trainer 在聚合后读取写入 training_history）
@@ -580,15 +584,16 @@ class CreamAggregator:
         device: str,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        从公共数据取固定 K 个 Batch（proxy_k_batches），提取图像和文本全局表征（Global Reps）。
+        从多模态公共数据取固定 K 个 Batch，提取图像和文本全局表征。
 
         设计约束：
           ① 在 torch.no_grad() 上下文内执行，禁止构建正向计算图；
           ② 返回张量强制 .detach()，物理截断跨客户端反向传播路径；
-          ③ 推理完成后立即置 None 释放中间激活，防止显存泄漏。
+          ③ 文本代理必须来自公共文本特征，禁止使用随机服务器向量代替；
+          ④ 图像和文本代理均位于 contrastive_dim 空间。
 
-        图像表征：调用 extract_features 提取，经 mean-pool 压缩为 1-D 向量后 EMA 更新。
-        文本表征：使用 fusion_head.text_proj（若存在）投影当前 EMA 文本表征作为文本锚点。
+        图像表征：调用 extract_features 提取，经 mean-pool 压缩为 1-D 向量。
+        文本表征：使用 fusion_head.project_text 投影公共文本特征。
 
         Returns:
             (image_proxy, text_proxy)，形状均为 (D,)，已 detach。
@@ -597,6 +602,7 @@ class CreamAggregator:
 
         data_iter = iter(public_dataloader)
         aggregated_img_vec: Optional[torch.Tensor] = None
+        aggregated_text_vec: Optional[torch.Tensor] = None
         used_batches = 0
 
         with torch.no_grad():
@@ -606,9 +612,27 @@ class CreamAggregator:
                 except StopIteration:
                     break
 
-                pub_imgs = (batch[0] if isinstance(batch, (list, tuple)) else batch).to(device)
+                if isinstance(batch, dict):
+                    pub_imgs = batch.get("image", batch.get("inp"))
+                    public_text_features = batch.get("text_feature")
+                elif isinstance(batch, (list, tuple)) and len(batch) >= 2:
+                    pub_imgs = batch[0]
+                    public_text_features = batch[1]
+                else:
+                    raise RuntimeError(
+                        "Proxy loader must provide (image, text_feature) batches"
+                    )
+                if not isinstance(pub_imgs, torch.Tensor):
+                    raise RuntimeError("Proxy batch image must be a tensor")
+                if not isinstance(public_text_features, torch.Tensor):
+                    raise RuntimeError("Proxy batch text_feature must be a tensor")
+
+                pub_imgs = pub_imgs.to(device)
+                public_text_features = public_text_features.to(device)
                 raw_feats = global_model.extract_features(pub_imgs)
-                pub_imgs = None
+                projected_text = global_model.fusion_head.project_text(
+                    public_text_features
+                )
 
                 if raw_feats.dim() == 3:
                     img_vec = raw_feats.mean(dim=(0, 1))
@@ -618,39 +642,65 @@ class CreamAggregator:
                     img_vec = raw_feats.flatten()
                 img_vec = nn.functional.normalize(img_vec, p=2, dim=0)
 
+                if projected_text.dim() == 3:
+                    projected_text = projected_text.mean(dim=1)
+                if projected_text.dim() != 2:
+                    raise RuntimeError(
+                        "Projected public text features must have shape (B, D)"
+                    )
+                text_vec = nn.functional.normalize(
+                    projected_text.mean(dim=0), p=2, dim=0
+                )
+
                 if aggregated_img_vec is None:
                     aggregated_img_vec = torch.zeros_like(img_vec, device=self.device)
+                    aggregated_text_vec = torch.zeros_like(
+                        text_vec, device=self.device
+                    )
                 aggregated_img_vec = aggregated_img_vec + img_vec.detach().to(self.device)
+                aggregated_text_vec = (
+                    aggregated_text_vec + text_vec.detach().to(self.device)
+                )
+                pub_imgs = public_text_features = raw_feats = projected_text = None
                 used_batches += 1
 
-        if used_batches == 0 or aggregated_img_vec is None:
-            print("[WARNING][generate_proxies] public_dataloader 为空，返回当前 EMA 表征")
-            return self.global_image_rep.detach().clone(), self.global_text_rep.detach().clone()
+        if (
+            used_batches == 0
+            or aggregated_img_vec is None
+            or aggregated_text_vec is None
+        ):
+            raise RuntimeError(
+                "Cannot generate global proxies from an empty public dataloader"
+            )
 
         image_proxy: torch.Tensor = nn.functional.normalize(
             aggregated_img_vec / float(used_batches), p=2, dim=0
         ).detach()
-        aggregated_img_vec = None
+        text_proxy: torch.Tensor = nn.functional.normalize(
+            aggregated_text_vec / float(used_batches), p=2, dim=0
+        ).detach()
+        aggregated_img_vec = aggregated_text_vec = None
+
+        if image_proxy.shape != self.global_image_rep.shape:
+            raise RuntimeError(
+                "Image proxy dimension differs from the server representation contract: "
+                f"{tuple(image_proxy.shape)} != {tuple(self.global_image_rep.shape)}"
+            )
+        if text_proxy.shape != self.global_text_rep.shape:
+            raise RuntimeError(
+                "Text proxy dimension differs from the server representation contract: "
+                f"{tuple(text_proxy.shape)} != {tuple(self.global_text_rep.shape)}"
+            )
 
         alpha = self.global_rep_alpha
         self.global_image_rep = nn.functional.normalize(
-            alpha * self.global_image_rep + (1 - alpha) * image_proxy
-            if self.global_image_rep.shape == image_proxy.shape
-            else image_proxy.clone(),
+            alpha * self.global_image_rep + (1 - alpha) * image_proxy,
             p=2, dim=0
         )
-
-        with torch.no_grad():
-            txt_src = self.global_text_rep.to(device)
-            text_proj = getattr(getattr(global_model, 'fusion_head', None), 'text_proj', None)
-            txt_projected = (
-                nn.functional.normalize(text_proj(txt_src.unsqueeze(0)).squeeze(0), p=2, dim=0)
-                if text_proj is not None
-                else nn.functional.normalize(txt_src, p=2, dim=0)
-            )
-
-        text_proxy: torch.Tensor = txt_projected.detach().to(self.device)
-        txt_src = txt_projected = None
+        self.global_text_rep = nn.functional.normalize(
+            alpha * self.global_text_rep + (1 - alpha) * text_proxy,
+            p=2, dim=0
+        )
 
         print(
             f"[generate_proxies] image_proxy.shape={image_proxy.shape}, "

@@ -804,11 +804,19 @@ class BaseClientTrainer(ABC):
         }
 
     def get_model_state(self, model: nn.Module) -> Dict[str, torch.Tensor]:
-        """Return exactly the named trainable parameters uploaded by the client."""
+        """Return exactly the parameters declared by the model training registry."""
+        if not hasattr(model, "get_trainable_params"):
+            raise AttributeError(
+                f"{type(model).__name__} must define get_trainable_params()"
+            )
+
+        registered_param_ids = {
+            id(parameter) for parameter in model.get_trainable_params()
+        }
         return {
             name: parameter.detach().cpu().clone()
             for name, parameter in model.named_parameters()
-            if parameter.requires_grad
+            if parameter.requires_grad and id(parameter) in registered_param_ids
         }
 
     def load_model_state(
@@ -1229,8 +1237,8 @@ class ImageOnlyTrainer(BaseClientTrainer):
         if mask is not None:
             # ★ Group A 实验：无 text_only 客户端，global_text_rep 为随机噪声，
             #   固定传 None，让 TextPromptEncoder 走零输出路径，不污染 Mask Decoder。
-            text_prompt = None
-            raw_output = model(img, text_prompt=text_prompt)
+            global_text_prompt = None
+            raw_output = model(img, global_text_rep=global_text_prompt)
             if isinstance(raw_output, tuple) and len(raw_output) == 2:
                 pred = raw_output[0]  # (B, 3, H, W) logits
             elif isinstance(raw_output, dict):
@@ -1408,14 +1416,12 @@ class MultimodalTrainer(BaseClientTrainer):
 
         # Step 1: 私有数据 - 分割损失
         if mask is not None:
-            # ★ Step 3: Multimodal 客户端同时接入早期融合 + 晚期 Prompt Prior
-            #   text_features: 当前批次私有文本（早期融合 GatedFusion）
-            #   text_prompt:   global_text_rep.detach()（晚期 Prompt 入 Mask Decoder）
+            # 多模态客户端同时注入当前批次私有文本与服务器全局文本代理。
             text_prompt_val = global_text_rep.detach() if use_text_assist and global_text_rep is not None else None
             pred = model(
                 img,
                 text_features=private_text_feat if use_text_assist else None,
-                text_prompt=text_prompt_val,   # ★ Step 3
+                global_text_rep=text_prompt_val,
             )
             if isinstance(pred, dict):
                 pred = pred.get('logits', list(pred.values())[0])

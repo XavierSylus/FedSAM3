@@ -24,6 +24,9 @@ class _ToyModel(nn.Module):
         self.text_encoder = nn.Linear(2, 2)
         self.text_proj = nn.Linear(2, 2)
 
+    def get_trainable_params(self):
+        return [parameter for parameter in self.parameters() if parameter.requires_grad]
+
 
 def _make_loader():
     dataset = TensorDataset(torch.zeros(1, 1), torch.zeros(1, 1))

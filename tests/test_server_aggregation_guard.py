@@ -9,6 +9,7 @@ class _DummyModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.embed_dim = 8
+        self.contrastive_dim = 8
         self.sam3_model = nn.Linear(2, 2, bias=False)  # vision-like key
         self.adapter_manager = nn.Linear(2, 2, bias=False)  # trainable key
         for p in self.sam3_model.parameters():
@@ -50,4 +51,3 @@ def test_strict_guard_raises_when_expected_vision_key_missing():
             location_tag="test",
             expected_param_names={"adapter_manager.weight", "sam3_model.weight"},
         )
-
