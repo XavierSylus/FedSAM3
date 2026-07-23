@@ -8,11 +8,15 @@ CreamFL Contrastive Losses: Privacy-preserving knowledge distillation
 - CreamFL src/criterions/probemb.py (MCSoftContrastiveLoss)
 """
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, Optional, Dict
 import numpy as np
+
+from data_processing.brats_region_contract import REGION_NAMES
 
 
 class ContrastiveLoss(nn.Module):
@@ -666,6 +670,74 @@ class TverskyLoss(nn.Module):
         # ④ 逐通道 Tversky 均值 -> Loss = 1 - Tversky
         mean_tversky = torch.stack(tversky_scores).mean()
         return 1.0 - mean_tversky
+
+
+class BraTSDiceBCELoss(nn.Module):
+    """Weighted soft-Dice plus BCEWithLogits for overlapping [WT, TC, ET]."""
+
+    def __init__(
+        self,
+        *,
+        dice_weight: float,
+        bce_weight: float,
+        smooth: float,
+    ) -> None:
+        super().__init__()
+        values = {
+            "dice_weight": dice_weight,
+            "bce_weight": bce_weight,
+            "smooth": smooth,
+        }
+        for name, value in values.items():
+            if not math.isfinite(float(value)) or float(value) <= 0.0:
+                raise ValueError(f"{name} must be a finite value greater than zero")
+        self.dice_weight = float(dice_weight)
+        self.bce_weight = float(bce_weight)
+        self.smooth = float(smooth)
+
+    @staticmethod
+    def _validate_inputs(logits: torch.Tensor, target: torch.Tensor) -> None:
+        if not isinstance(logits, torch.Tensor) or not isinstance(target, torch.Tensor):
+            raise TypeError("logits and target must be torch.Tensor instances")
+        if logits.ndim != 4 or logits.shape[1] != len(REGION_NAMES):
+            raise ValueError(
+                f"logits must have shape [B, 3, H, W] in order {REGION_NAMES}, "
+                f"got {tuple(logits.shape)}"
+            )
+        if tuple(target.shape) != tuple(logits.shape):
+            raise ValueError(
+                f"target must have shape [B, 3, H, W] identical to logits; "
+                f"got logits={tuple(logits.shape)}, target={tuple(target.shape)}"
+            )
+        if target.dtype != torch.float32:
+            raise TypeError(f"target must use torch.float32, got {target.dtype}")
+        if not torch.is_floating_point(logits) or logits.is_complex():
+            raise TypeError("logits must use a real floating-point dtype")
+        if logits.device != target.device:
+            raise ValueError(
+                f"logits and target must share a device, got {logits.device} and {target.device}"
+            )
+        if not torch.isfinite(logits).all() or not torch.isfinite(target).all():
+            raise ValueError("logits and target must contain only finite values")
+        if torch.any((target != 0.0) & (target != 1.0)):
+            raise ValueError("target must be binary with values in {0, 1}")
+
+        wt = target[:, 0].bool()
+        tc = target[:, 1].bool()
+        et = target[:, 2].bool()
+        if torch.any(et & ~tc) or torch.any(tc & ~wt):
+            raise ValueError("target must satisfy ET subset TC subset WT")
+
+    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        self._validate_inputs(logits, target)
+        probabilities = torch.sigmoid(logits)
+        intersection = (probabilities * target).sum(dim=(2, 3))
+        denominator = probabilities.sum(dim=(2, 3)) + target.sum(dim=(2, 3))
+        dice_loss = 1.0 - (
+            (2.0 * intersection + self.smooth) / (denominator + self.smooth)
+        ).mean()
+        bce_loss = F.binary_cross_entropy_with_logits(logits, target)
+        return self.dice_weight * dice_loss + self.bce_weight * bce_loss
 
 
 class RobustMedicalLoss(nn.Module):
