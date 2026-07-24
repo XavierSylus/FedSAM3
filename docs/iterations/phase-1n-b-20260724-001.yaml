@@ -1,0 +1,18 @@
+phase: 1N-B
+base_commit: 9fb5b52c3d189cf44aec0f796a73110367b6119e
+backup_tag: backup/pre-phase-1n-b-20260724-001
+scope:
+  implementation_files:
+    - tests/test_optimizer_upload_contract.py
+    - tests/test_fedprox_same_loss_contract.py
+  audit_record: docs/iterations/phase-1n-b-20260724-001.yaml
+actions:
+  - replace abstract base-class allocation in optimizer upload tests with a minimal concrete test trainer
+  - replace abstract base-class allocation in FedProx tests with a minimal concrete test trainer
+verification:
+  - static Python AST contract check
+  - diff check
+runtime_validation: deferred_to_server
+implementation_commit: 7f357d7002b422ec72bb79ceaa5a6c159321bb2b
+origin_main_confirmed: 7f357d7002b422ec72bb79ceaa5a6c159321bb2b
+status: COMPLETE
