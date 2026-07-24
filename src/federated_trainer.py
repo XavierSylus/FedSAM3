@@ -1008,9 +1008,13 @@ class FederatedTrainer:
             "update_rms",
             "numel",
             "parameter_count",
+            "nonzero_parameter_count",
+            "nonzero_parameter_ratio",
+            "sample_weight",
             "cosine_similarity",
             "angle_deg",
             "is_negative",
+            "conflict_status",
             "shared_numel",
             "shared_parameter_count",
             "pair_count",
@@ -1019,6 +1023,12 @@ class FederatedTrainer:
             "conflict_rate",
             "mean_cosine_similarity",
             "mean_angle_deg",
+            "shared_pair_count",
+            "no_shared_pair_count",
+            "undefined_pair_count",
+            "routing_mode",
+            "aggregation_client_ids",
+            "aggregation_participation",
         ]
         write_header = not csv_path.exists()
         with csv_path.open("a", encoding="utf-8", newline="") as handle:
@@ -1484,6 +1494,8 @@ class FederatedTrainer:
                 if round_client_updates[cid] is not None
             },
             client_modalities=client_modality_map,
+            client_sample_counts=client_sample_counts,
+            aggregation_audit=aggregation_audit,
             aggregated_state=aggregated_state,
         )
         self._persist_parameter_group_diagnostics(

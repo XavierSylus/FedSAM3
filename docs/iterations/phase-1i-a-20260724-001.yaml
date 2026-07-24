@@ -1,0 +1,61 @@
+iteration_id: phase-1i-a-20260724-001
+base_commit: 5f5c4e71216009a8e5a622fc7450714fdc1a0cf0
+target_remote: origin
+target_branch: main
+scope:
+  requirement_ids:
+    - 1I
+  files_to_modify:
+    - src/update_diagnostics.py
+    - src/federated_trainer.py
+    - tests/test_update_diagnostics.py
+  files_to_add:
+    - docs/iterations/phase-1i-a-20260724-001.yaml
+  files_to_delete: []
+  approved_file_limit_exception: user-approved iteration record in addition to the three implementation files
+contracts_affected:
+  - client drift uses only optimizer-scoped uploaded parameters and records private-case sample weight
+  - client pair conflicts use only shared real uploads and represent undefined comparisons as null
+  - server drift records routing mode and per-parameter aggregation participants and normalized weights
+data_flow:
+  input:
+    - round-global parameter snapshot
+    - optimizer-scoped client uploads
+    - private case counts
+    - strict server aggregation audit
+    - aggregated parameter state
+  transformation:
+    - compute per-client group delta norm, relative drift, RMS, nonzero parameter ratio, and sample weight
+    - compute conflict only for shared uploaded parameter names
+    - retain no-shared and zero-norm comparisons as undefined rather than zero conflict
+    - attach server audit participation and normalized weights to group drift
+  output:
+    - parameter_group_diagnostics.jsonl
+    - parameter_group_diagnostics.csv
+side_effects:
+  - mismatched client IDs, sample counts, audit keys, parameter groups, and normalized weights fail immediately
+  - no local training, smoke run, model forward, or model backward is performed
+acceptance_tests:
+  - opposite updates produce cosine minus one and angle 180 degrees
+  - aligned updates produce cosine one
+  - no shared uploaded key produces null conflict values
+  - unrestricted zero-update dilution changes server drift without a defined client conflict
+static_validation:
+  - Python AST parsing for changed source and test definitions
+  - source-level checks for audit wiring and undefined conflict handling
+  - YAML parsing for this iteration record
+  - git diff whitespace check
+  - no local test execution, training, smoke run, model forward, or model backward
+known_followups:
+  - phase 1J must complete same-loss FedProx proof and contract tests
+  - phase 1K must persist deterministic data, sampler, slice, augmentation, and client-order states
+  - phase 1M must present obsolete legacy aggregation callers and tests for explicit migration or deletion approval
+local_prohibited_actions:
+  - training
+  - smoke_run
+  - model_forward
+  - model_backward
+backup_tag: backup/pre-phase-1i-a-20260724-001
+implementation_commit: PENDING
+origin_main_confirmed: PENDING
+status: IN_PROGRESS
