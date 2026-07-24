@@ -1,0 +1,21 @@
+phase: 1M-C
+base_commit: 1ff55882ee77b944cf213c19eac65b33df49b942
+backup_tag: backup/pre-phase-1m-c-20260724-001
+scope:
+  implementation_files:
+    - tests/test_experiment_protocol.py
+    - tests/test_fedprox_proxy_contract.py
+    - tests/test_experiment_matrix_contract.py
+  audit_record: docs/iterations/phase-1m-c-20260724-001.yaml
+actions:
+  - remove the obsolete experiment-protocol test tied to upload toggles and decoupled flags
+  - replace the matrix check with explicit routing, zero-update, FedProx, sample-weight, and determinism assertions
+  - align the proxy contract upload and client-cache AST checks with optimizer-scoped parameter uploads
+verification:
+  - static Python parse
+  - static YAML and JSON contract assertions
+  - diff check
+runtime_validation: deferred_to_server
+implementation_commit: d11b864d19ba9d7fa3080d8f153fac90080bf33a
+origin_main_confirmed: d11b864d19ba9d7fa3080d8f153fac90080bf33a
+status: COMPLETE
