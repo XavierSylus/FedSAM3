@@ -1,0 +1,21 @@
+phase: 1P-E
+base_commit: 604df345d2480cf02984fe50b41dd598a1e1ce9a
+backup_tag: backup/pre-phase-1p-e-20260724-001
+scope:
+  implementation_files:
+    - src/config_manager.py
+    - scripts/server_preflight.py
+    - tests/test_fedprox_proxy_contract.py
+  audit_record: docs/iterations/phase-1p-e-20260724-001.yaml
+actions:
+  - centralize strict and best_effort_cuda flag pairs
+  - reject a server configuration whose PyTorch flags do not match its mode
+  - expose the reproducibility contract in the preflight JSON summary
+verification:
+  - Python AST and compile checks
+  - preflight contract static check
+  - diff check excluding core_projects
+runtime_validation: deferred_to_server
+implementation_commit: 1f673b7ce4cc81e69855b109a7befed563d91821
+origin_main_confirmed: 1f673b7ce4cc81e69855b109a7befed563d91821
+status: COMPLETE
