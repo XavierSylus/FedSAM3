@@ -1,6 +1,6 @@
 {
-  "manifest_schema_version": 2,
-  "protocol": "strict parameterwise routing x FedProx comparison",
+  "manifest_schema_version": 3,
+  "protocol": "parameterwise routing x FedProx comparison",
   "seed": 3407,
   "client_structure": [
     {
@@ -40,8 +40,12 @@
     "rounds": 60,
     "local_epochs": 1,
     "reproducibility": {
+      "mode": "best_effort_cuda",
       "deterministic_algorithms": true,
-      "deterministic_warn_only": false,
+      "deterministic_warn_only": true,
+      "bitwise_reproducible": false,
+      "known_nondeterministic_operation": "grid_sampler_2d_backward_cuda",
+      "comparison_rule": "all experiment cells use the same declared seed schedule",
       "num_workers": 0,
       "persistent_workers": false,
       "recorded_state": [
