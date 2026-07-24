@@ -1,0 +1,35 @@
+iteration_id: phase-1m-a-20260724-001
+base_commit: 27827674c2106ef2bc28c530784db5deb3824c56
+target_remote: origin
+target_branch: main
+scope:
+  requirement_ids:
+    - 1M
+  files_to_delete:
+    - tests/smoke_test.py
+    - tests/test_aggregation_routing.py
+    - tests/test_ema_decoupled_update.py
+  files_to_add:
+    - docs/iterations/phase-1m-a-20260724-001.yaml
+  approved_file_limit_exception: user-approved iteration record in addition to the three deleted test files
+deletion_rationale:
+  - smoke_test.py uploads and distributes complete model state dictionaries
+  - test_aggregation_routing.py exercises the legacy dynamic router rather than the U/R parameterwise contract
+  - test_ema_decoupled_update.py exercises obsolete client-representation EMA behavior rather than fixed public proxy generation
+contracts_preserved:
+  - test_parameterwise_aggregation.py covers the strict U/R aggregation contract
+  - test_buffer_distribution_contract.py covers parameter and buffer boundaries
+static_validation:
+  - confirm each approved legacy test is absent
+  - confirm strict replacement tests remain present
+  - git diff whitespace check
+  - no local test execution, training, smoke run, model forward, or model backward
+local_prohibited_actions:
+  - training
+  - smoke_run
+  - model_forward
+  - model_backward
+backup_tag: backup/pre-phase-1m-a-20260724-001
+implementation_commit: PENDING
+origin_main_confirmed: PENDING
+status: IN_PROGRESS
