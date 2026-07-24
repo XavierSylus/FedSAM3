@@ -1,0 +1,19 @@
+phase: 1P-B
+base_commit: 253fc470406581c841b65327dfd04a7f3a609c1d
+backup_tag: backup/pre-phase-1p-b-20260724-001
+scope:
+  implementation_files:
+    - configs/fedsam3_2x2_u_fedprox.yaml
+    - configs/fedsam3_2x2_r_fedavg.yaml
+    - configs/fedsam3_2x2_r_fedprox.yaml
+  audit_record: docs/iterations/phase-1p-b-20260724-001.yaml
+actions:
+  - align all remaining main experiment YAML files with best_effort_cuda
+  - preserve the routing and FedProx fields for each experiment cell
+verification:
+  - YAML contract check across all four main experiment configurations
+  - diff check excluding core_projects
+runtime_validation: deferred_to_server
+implementation_commit: 310a19426199e5919cbdbaa18514cd568dc89a6a
+origin_main_confirmed: 310a19426199e5919cbdbaa18514cd568dc89a6a
+status: COMPLETE
