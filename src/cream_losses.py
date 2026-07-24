@@ -824,7 +824,8 @@ class BraTSDiceBCELoss(nn.Module):
         )
         dice_gradient_norm = torch.linalg.vector_norm(dice_logit_gradient)
         bce_gradient_norm = torch.linalg.vector_norm(bce_logit_gradient)
-        bce_scale = dice_gradient_norm / bce_gradient_norm.clamp_min(
-            torch.finfo(logits.dtype).eps
-        )
+        bce_scale = (
+            dice_gradient_norm
+            / bce_gradient_norm.clamp_min(torch.finfo(logits.dtype).eps)
+        ).detach()
         return self.dice_weight * dice_loss + self.bce_weight * bce_scale * bce_loss

@@ -138,6 +138,47 @@ def test_sparse_foreground_balances_dice_and_bce_logit_gradient_scales():
     )
 
 
+def test_gradient_balance_scale_is_constant_during_backpropagation():
+    logits = torch.zeros(1, 3, 16, 16, requires_grad=True)
+    target = torch.zeros_like(logits, dtype=torch.float32)
+    target[:, 0, 4:12, 4:12] = 1.0
+    target[:, 1, 6:10, 6:10] = 1.0
+    target[:, 2, 7:9, 7:9] = 1.0
+    criterion = BraTSDiceBCELoss(
+        dice_weight=1.0,
+        bce_weight=1.0,
+        smooth=1.0,
+    )
+
+    probabilities = torch.sigmoid(logits)
+    intersection = (probabilities * target).sum(dim=(2, 3))
+    denominator = probabilities.sum(dim=(2, 3)) + target.sum(dim=(2, 3))
+    dice_loss = 1.0 - (
+        (2.0 * intersection + 1.0) / (denominator + 1.0)
+    ).mean()
+    positive_count = target.sum(dim=(0, 2, 3))
+    channel_size = target.shape[0] * target.shape[2] * target.shape[3]
+    positive_weight = ((channel_size - positive_count) / positive_count).view(
+        1, 3, 1, 1
+    )
+    bce_loss = F.binary_cross_entropy_with_logits(
+        logits,
+        target,
+        pos_weight=positive_weight,
+    )
+    dice_gradient = torch.autograd.grad(dice_loss, logits, retain_graph=True)[0]
+    bce_gradient = torch.autograd.grad(bce_loss, logits, retain_graph=True)[0]
+    bce_scale = (
+        torch.linalg.vector_norm(dice_gradient)
+        / torch.linalg.vector_norm(bce_gradient)
+    ).detach()
+
+    actual_gradient = torch.autograd.grad(criterion(logits, target), logits)[0]
+    expected_gradient = dice_gradient + bce_scale * bce_gradient
+
+    assert torch.allclose(actual_gradient, expected_gradient, rtol=1e-5, atol=1e-7)
+
+
 def test_empty_target_channels_are_not_skipped():
     logits = torch.full((1, 3, 2, 2), 4.0, requires_grad=True)
     target = torch.zeros_like(logits, dtype=torch.float32)
