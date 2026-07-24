@@ -1,0 +1,58 @@
+iteration_id: phase-1k-b-20260724-001
+base_commit: 4a0322920c49da8f094e56e866d3771790db9f61
+target_remote: origin
+target_branch: main
+scope:
+  requirement_ids:
+    - 1K
+  files_to_modify:
+    - data/heterogeneous_dataset_loader.py
+    - src/federated_trainer.py
+    - tests/test_reproducibility_contract.py
+  files_to_add:
+    - docs/iterations/phase-1k-b-20260724-001.yaml
+  files_to_delete: []
+  approved_file_limit_exception: user-approved iteration record in addition to the three implementation files
+contracts_affected:
+  - each client-round private and public DataLoader receives a derived torch.Generator
+  - each client-round foreground-slice selection receives a derived torch.Generator
+  - run metadata records case manifests, data manifest SHA256, loader generator states, AMP, and deterministic settings
+  - training history records client order, public proxy order, optimizer initial state, and scheduler initial state per round
+data_flow:
+  input:
+    - global experiment seed
+    - round number
+    - client identifier
+    - loader stream identifier
+  transformation:
+    - derive stream seeds as SHA256(seed|round|client_id|stream)
+    - attach order and slice generators to the active loaders and datasets
+    - serialize case IDs, generator-state SHA256 values, and optimizer scheduler initialization records
+  output:
+    - run_metadata.json
+    - training_history.json
+side_effects:
+  - strict training rejects non-RandomSampler loaders and nonzero DataLoader worker counts
+  - no data augmentation is present and its state is recorded as disabled
+acceptance_tests:
+  - reseeding a loader reproduces its sampler order
+  - image loaders receive an independent slice-selection generator
+  - metadata includes case IDs, data manifest SHA256, and stream-seed derivation
+static_validation:
+  - Python AST parsing for changed source and test definitions
+  - source-level checks for generator, manifest, client order, proxy, optimizer, and scheduler records
+  - YAML parsing for this iteration record
+  - git diff whitespace check
+  - no local test execution, training, smoke run, model forward, or model backward
+known_followups:
+  - phase 1L must make strict deterministic fields explicit in every experiment YAML and manifest
+  - phase 1M must present obsolete legacy aggregation callers and tests for explicit migration or deletion approval
+local_prohibited_actions:
+  - training
+  - smoke_run
+  - model_forward
+  - model_backward
+backup_tag: backup/pre-phase-1k-b-20260724-001
+implementation_commit: PENDING
+origin_main_confirmed: PENDING
+status: IN_PROGRESS

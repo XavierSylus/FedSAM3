@@ -1,11 +1,12 @@
+import hashlib
 import warnings
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, RandomSampler
 
 from data_processing.brats_region_contract import brats_labels_to_regions
 
@@ -32,6 +33,7 @@ class HeterogeneousBraTSDataset(Dataset):
         load_mask: bool = True,
         include_text_features: bool = True,
         is_validation: bool = False,
+        slice_generator: Optional[torch.Generator] = None,
     ):
         self.data_dir = Path(data_dir)
         self.mode = mode
@@ -40,6 +42,7 @@ class HeterogeneousBraTSDataset(Dataset):
         self.load_mask = load_mask
         self.include_text_features = include_text_features
         self.is_validation = is_validation
+        self._slice_generator = slice_generator
         self.samples: Optional[List[Tuple[int, int]]] = None
         self._all_zero_mask_warned_cases: set[str] = set()
 
@@ -87,6 +90,36 @@ class HeterogeneousBraTSDataset(Dataset):
         if self.samples is not None:
             return len(self.samples)
         return len(self.case_folders)
+
+    def set_slice_generator(self, generator: torch.Generator) -> None:
+        if not isinstance(generator, torch.Generator):
+            raise TypeError("slice_generator must be a torch.Generator")
+        self._slice_generator = generator
+
+    def get_reproducibility_manifest(self) -> Dict[str, Any]:
+        if self.client_type == "text_only":
+            case_ids = [
+                text_path.parent.name
+                if "BraTS" in text_path.parent.name
+                else text_path.name.removesuffix("_text.npy")
+                for text_path in self.text_files
+            ]
+        else:
+            case_ids = [case_folder.name for case_folder in self.case_folders]
+
+        manifest: Dict[str, Any] = {
+            "mode": self.mode,
+            "client_type": self.client_type,
+            "load_mask": self.load_mask,
+            "is_validation": self.is_validation,
+            "case_ids": case_ids,
+        }
+        if self.samples is not None:
+            manifest["validation_samples"] = [
+                [self.case_folders[case_idx].name, int(slice_idx)]
+                for case_idx, slice_idx in self.samples
+            ]
+        return manifest
 
     def __getitem__(self, idx: int):
         """
@@ -201,7 +234,12 @@ class HeterogeneousBraTSDataset(Dataset):
         per_slice_fg = torch.from_numpy((mask_data > 0).sum(axis=(0, 1)).astype(np.int64))
         valid_indices = torch.where(per_slice_fg > 10)[0]
         if len(valid_indices) > 0:
-            rand_pos = torch.randint(0, len(valid_indices), (1,)).item()
+            rand_pos = torch.randint(
+                0,
+                len(valid_indices),
+                (1,),
+                generator=self._slice_generator,
+            ).item()
             return valid_indices[rand_pos].item()
         return torch.argmax(per_slice_fg).item()
 
@@ -309,6 +347,65 @@ def heterogeneous_collate_fn(batch, client_type: str):
         return (torch.stack([item[0] for item in batch], dim=0),)
 
     raise ValueError(f"Unknown client_type: {client_type}")
+
+
+def _generator_state_sha256(generator: torch.Generator) -> str:
+    return hashlib.sha256(generator.get_state().cpu().numpy().tobytes()).hexdigest()
+
+
+def loader_requires_random_slice(loader: DataLoader) -> bool:
+    dataset = loader.dataset
+    return bool(
+        isinstance(dataset, HeterogeneousBraTSDataset)
+        and dataset.client_type in {"image_only", "multimodal"}
+        and dataset.load_mask
+        and dataset.samples is None
+    )
+
+
+def configure_loader_randomness(
+    loader: DataLoader,
+    *,
+    order_seed: int,
+    slice_seed: Optional[int],
+) -> Dict[str, Any]:
+    if not isinstance(loader, DataLoader):
+        raise TypeError("loader must be a torch.utils.data.DataLoader")
+    if loader.num_workers != 0:
+        raise ValueError("Strict reproducibility requires DataLoader num_workers=0")
+    if isinstance(order_seed, bool) or not isinstance(order_seed, int) or order_seed < 0:
+        raise ValueError("order_seed must be a non-negative integer")
+    if (
+        slice_seed is not None
+        and (isinstance(slice_seed, bool) or not isinstance(slice_seed, int) or slice_seed < 0)
+    ):
+        raise ValueError("slice_seed must be None or a non-negative integer")
+    if not isinstance(loader.sampler, RandomSampler):
+        raise ValueError("Strict reproducibility requires a RandomSampler DataLoader")
+
+    order_generator = torch.Generator().manual_seed(order_seed)
+    loader.generator = order_generator
+    loader.sampler.generator = order_generator
+    state: Dict[str, Any] = {
+        "order_seed": order_seed,
+        "order_generator_state_sha256": _generator_state_sha256(order_generator),
+        "slice_seed": None,
+        "slice_generator_state_sha256": None,
+        "augmentation": {"enabled": False, "state": None},
+    }
+
+    dataset = loader.dataset
+    uses_random_slices = loader_requires_random_slice(loader)
+    if uses_random_slices:
+        if slice_seed is None:
+            raise ValueError("Random slice selection requires slice_seed")
+        slice_generator = torch.Generator().manual_seed(slice_seed)
+        dataset.set_slice_generator(slice_generator)
+        state["slice_seed"] = slice_seed
+        state["slice_generator_state_sha256"] = _generator_state_sha256(slice_generator)
+    elif slice_seed is not None:
+        raise ValueError("slice_seed is only valid for random foreground-slice loaders")
+    return state
 
 
 def create_heterogeneous_data_loaders(

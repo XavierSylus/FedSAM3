@@ -57,7 +57,11 @@ from src.parameter_groups import (
     allowed_modalities,
     classify_trainable_parameters,
 )
-from data.heterogeneous_dataset_loader import create_heterogeneous_data_loaders
+from data.heterogeneous_dataset_loader import (
+    configure_loader_randomness,
+    create_heterogeneous_data_loaders,
+    loader_requires_random_slice,
+)
 from data_processing.brats_region_contract import (
     logits_to_brats_labels,
     regions_to_brats_labels,
@@ -170,6 +174,7 @@ class FederatedTrainer:
         self.client_trainers = None
         self.client_states = None
         self.client_sample_counts: Dict[str, int] = {}
+        self._initial_loader_randomness: Dict[str, Dict[str, Any]] = {}
         self.val_loader = None
         self.logger = None
         
@@ -192,6 +197,7 @@ class FederatedTrainer:
             'parameter_group_diagnostics': [],
             'parameter_group_effectiveness': [],
             'aggregation_audits': [],
+            'round_reproducibility': [],
         }
         self.last_val_metrics = {}
         self.best_val_dice = 0.0
@@ -412,7 +418,168 @@ class FederatedTrainer:
     def _sha256_json(cls, payload: Any) -> str:
         return hashlib.sha256(cls._stable_json_dumps(payload).encode("utf-8")).hexdigest()
 
-    def _build_run_identity(self) -> Dict[str, Any]:
+    def _derive_reproducibility_seed(
+        self,
+        *,
+        round_num: int,
+        client_id: str,
+        stream: str,
+    ) -> int:
+        if round_num < 0:
+            raise ValueError("round_num must be non-negative")
+        material = "|".join(
+            [
+                str(int(getattr(self.config, "seed", 3407))),
+                str(round_num),
+                self._normalize_client_id(client_id),
+                stream,
+            ]
+        ).encode("utf-8")
+        return int.from_bytes(hashlib.sha256(material).digest()[:8], "big") % (2**63 - 1)
+
+    def _configure_loader_stream(
+        self,
+        *,
+        round_num: int,
+        client_id: str,
+        stream: str,
+        loader: DataLoader,
+    ) -> Dict[str, Any]:
+        order_seed = self._derive_reproducibility_seed(
+            round_num=round_num,
+            client_id=client_id,
+            stream=f"{stream}:order",
+        )
+        slice_seed = None
+        if loader_requires_random_slice(loader):
+            slice_seed = self._derive_reproducibility_seed(
+                round_num=round_num,
+                client_id=client_id,
+                stream=f"{stream}:slice",
+            )
+        return configure_loader_randomness(
+            loader,
+            order_seed=order_seed,
+            slice_seed=slice_seed,
+        )
+
+    @staticmethod
+    def _dataset_reproducibility_manifest(dataset: Any) -> Dict[str, Any]:
+        manifest_getter = getattr(dataset, "get_reproducibility_manifest", None)
+        if callable(manifest_getter):
+            manifest = manifest_getter()
+            if not isinstance(manifest, dict):
+                raise RuntimeError("Dataset reproducibility manifest must be a dictionary")
+            return manifest
+        if isinstance(dataset, ConcatDataset):
+            return {
+                "dataset_type": "concat",
+                "datasets": [
+                    FederatedTrainer._dataset_reproducibility_manifest(child)
+                    for child in dataset.datasets
+                ],
+            }
+        raise RuntimeError(
+            "Strict reproducibility requires datasets to expose get_reproducibility_manifest"
+        )
+
+    def _build_data_manifest(self) -> Dict[str, Any]:
+        client_configs = getattr(self, "client_configs", None) or {}
+        val_loader = getattr(self, "val_loader", None)
+        client_entries: List[Dict[str, Any]] = []
+        for client_id in client_configs:
+            client_cfg = client_configs[client_id]
+            private_loader = client_cfg.get("private_loader")
+            if private_loader is None:
+                raise RuntimeError(f"Client {client_id} has no private loader")
+            public_loader = client_cfg.get("public_loader")
+            client_entries.append(
+                {
+                    "client_id": client_id,
+                    "modality": str(client_cfg.get("modality", "")),
+                    "private": self._dataset_reproducibility_manifest(private_loader.dataset),
+                    "public": (
+                        self._dataset_reproducibility_manifest(public_loader.dataset)
+                        if public_loader is not None
+                        else None
+                    ),
+                }
+            )
+        return {
+            "client_participation_order": list(client_configs.keys()),
+            "clients": client_entries,
+            "validation": (
+                self._dataset_reproducibility_manifest(val_loader.dataset)
+                if val_loader is not None
+                else None
+            ),
+        }
+
+    def _prepare_proxy_round_randomness(self, round_num: int) -> Dict[str, Any]:
+        if bool(getattr(self.config, "disable_global_rep_update", False)):
+            return {"source": "frozen_server_representations"}
+        proxy_client_id = str(getattr(self.config, "proxy_client_id", "") or "").strip()
+        if not proxy_client_id:
+            return {"source": "server_representations"}
+        matches = [
+            client_id
+            for client_id in self.client_configs
+            if self._normalize_client_id(client_id)
+            == self._normalize_client_id(proxy_client_id)
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(f"Configured proxy client not found: {proxy_client_id}")
+        client_id = matches[0]
+        proxy_loader = self.client_configs[client_id].get("public_loader")
+        if proxy_loader is None:
+            raise RuntimeError(f"Proxy client has no public loader: {client_id}")
+        return {
+            "source": "public_multimodal_proxy",
+            "client_id": client_id,
+            "loader": self._configure_loader_stream(
+                round_num=round_num,
+                client_id=client_id,
+                stream="public_proxy",
+                loader=proxy_loader,
+            ),
+        }
+
+    def _describe_optimizer_initial_state(
+        self,
+        optimizer: torch.optim.Optimizer,
+    ) -> Dict[str, Any]:
+        if optimizer.state:
+            raise RuntimeError("Strict rounds require an empty optimizer initial state")
+        parameter_names = {
+            id(parameter): name
+            for name, parameter in self.global_model.named_parameters()
+        }
+        groups: List[Dict[str, Any]] = []
+        for group in optimizer.param_groups:
+            names = []
+            for parameter in group["params"]:
+                name = parameter_names.get(id(parameter))
+                if name is None:
+                    raise RuntimeError("Optimizer contains an unnamed model parameter")
+                names.append(name)
+            groups.append(
+                {
+                    "parameter_names": names,
+                    "lr": float(group["lr"]),
+                    "initial_lr": float(group["initial_lr"]),
+                    "weight_decay": float(group.get("weight_decay", 0.0)),
+                }
+            )
+        return {
+            "optimizer": type(optimizer).__name__,
+            "state_entry_count": 0,
+            "param_groups": groups,
+        }
+
+    def _build_run_identity(
+        self,
+        data_manifest_sha256: Optional[str] = None,
+    ) -> Dict[str, Any]:
         config_snapshot = self.config.to_dict()
         config_snapshot.pop("config_source_path", None)
         config_snapshot.pop("config_source_sha256", None)
@@ -469,6 +636,7 @@ class FederatedTrainer:
                 "thresholds": getattr(self.config, "segmentation_thresholds", None),
             },
             "data_root": str(getattr(self.config, "data_root", "")),
+            "data_manifest_sha256": data_manifest_sha256,
             "clients": client_entries,
             "missing_modality_client_ratio": self._missing_modality_client_ratio(
                 self.client_configs or {}
@@ -503,7 +671,9 @@ class FederatedTrainer:
         print(f"[Seed] Using random seed: {seed}")
 
     def _collect_run_metadata(self) -> Dict[str, Any]:
-        run_identity = self._build_run_identity()
+        data_manifest = self._build_data_manifest()
+        data_manifest_sha256 = self._sha256_json(data_manifest)
+        run_identity = self._build_run_identity(data_manifest_sha256)
         config_source_sha256 = getattr(self.config, "config_source_sha256", None)
         if not isinstance(config_source_sha256, str) or len(config_source_sha256) != 64:
             raise RuntimeError("Strict experiments require a YAML configuration SHA256")
@@ -553,6 +723,14 @@ class FederatedTrainer:
             "run_started_at": datetime.now().isoformat(),
             "config_source_path": getattr(self.config, "config_source_path", None),
             "config_file_sha256": config_source_sha256,
+            "data_manifest": data_manifest,
+            "data_manifest_sha256": data_manifest_sha256,
+            "loader_randomness_initialization": getattr(
+                self,
+                "_initial_loader_randomness",
+                {},
+            ),
+            "round_randomness_derivation": "sha256(seed|round|client_id|stream)",
             "config_hash": run_identity["config_hash"],
             "protocol_hash": run_identity["protocol_hash"],
             "protocol_payload": run_identity["protocol_payload"],
@@ -669,6 +847,25 @@ class FederatedTrainer:
 
             self._validate_client_protocol_after_filter()
             self.client_sample_counts = self._derive_private_case_counts()
+            self._initial_loader_randomness = {}
+            for client_id, cfg in self.client_configs.items():
+                initialization_state = {
+                    "private_loader": self._configure_loader_stream(
+                        round_num=0,
+                        client_id=client_id,
+                        stream="private_initialization",
+                        loader=cfg["private_loader"],
+                    ),
+                    "public_loader": None,
+                }
+                if cfg.get("public_loader") is not None:
+                    initialization_state["public_loader"] = self._configure_loader_stream(
+                        round_num=0,
+                        client_id=client_id,
+                        stream="public_initialization",
+                        loader=cfg["public_loader"],
+                    )
+                self._initial_loader_randomness[client_id] = initialization_state
 
 
             print(f"    - {len(self.client_configs)} 个客户端配置已创建")
@@ -1213,6 +1410,13 @@ class FederatedTrainer:
         round_global_state = self.server.get_trainable_parameter_snapshot()
         round_buffer_snapshot = self.server.capture_round_buffer_snapshot()
         round_global_reference_state = round_global_state if fedprox_mode else None
+        client_participation_order = list(self.client_configs.keys())
+        round_reproducibility: Dict[str, Any] = {
+            "round": round_num,
+            "client_participation_order": client_participation_order,
+            "public_proxy": self._prepare_proxy_round_randomness(round_num),
+            "clients": {},
+        }
         if fedprox_mode:
             print(
                 f"[Baseline] FedProx active: mu={getattr(self.config, 'fedprox_mu', 0.0):.4f}, "
@@ -1221,8 +1425,28 @@ class FederatedTrainer:
         round_global_reps = self._prepare_round_global_reps()
         
         # === 串行训练：逐个客户端训练 ===
-        for client_idx, (client_id, cfg) in enumerate(self.client_configs.items(), 1):
+        for client_idx, client_id in enumerate(client_participation_order, 1):
+            cfg = self.client_configs[client_id]
             print(f"\n[Client {client_idx}/{len(self.client_configs)}] Training {client_id} ({cfg['modality']})...")
+            client_loader_randomness = {
+                "private_loader": self._configure_loader_stream(
+                    round_num=round_num,
+                    client_id=client_id,
+                    stream="private_train",
+                    loader=cfg["private_loader"],
+                ),
+                "public_loader": None,
+            }
+            if cfg.get("public_loader") is not None:
+                client_loader_randomness["public_loader"] = self._configure_loader_stream(
+                    round_num=round_num,
+                    client_id=client_id,
+                    stream="public_train",
+                    loader=cfg["public_loader"],
+                )
+            round_reproducibility["clients"][client_id] = {
+                "loaders": client_loader_randomness,
+            }
             
             # Step 1: 加载客户端状态到全局模型（GPU）
             print(f"  [1/5] Loading {client_id} state to GPU...")
@@ -1336,6 +1560,18 @@ class FederatedTrainer:
 
             for pg in optimizer.param_groups:
                 pg['lr'] = pg['initial_lr'] * _cosine_factor
+
+            round_reproducibility["clients"][client_id][
+                "optimizer_initial_state"
+            ] = self._describe_optimizer_initial_state(optimizer)
+            round_reproducibility["clients"][client_id][
+                "scheduler_initial_state"
+            ] = {
+                "name": _scheduler,
+                "round": round_num,
+                "warmup_rounds": int(_warmup),
+                "factor": float(_cosine_factor),
+            }
 
 
             
@@ -1614,6 +1850,7 @@ class FederatedTrainer:
         self.training_history['parameter_group_effectiveness'].append(
             {"round": round_num, "clients": round_client_effectiveness}
         )
+        self.training_history['round_reproducibility'].append(round_reproducibility)
         self.training_history['global_text_rep_norms'].append(
             updated_global_reps['global_text_rep'].norm().item()
         )
