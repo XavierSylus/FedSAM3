@@ -73,9 +73,11 @@ def test_config_source_provenance_does_not_change_run_identity(tmp_path):
     first_trainer = object.__new__(FederatedTrainer)
     first_trainer.config = FederatedConfig.from_yaml(str(first_path))
     first_trainer.client_configs = {}
+    first_trainer.client_sample_counts = {}
     second_trainer = object.__new__(FederatedTrainer)
     second_trainer.config = FederatedConfig.from_yaml(str(second_path))
     second_trainer.client_configs = {}
+    second_trainer.client_sample_counts = {}
 
     assert first_trainer._build_run_identity()["config_hash"] == (
         second_trainer._build_run_identity()["config_hash"]
