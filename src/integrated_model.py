@@ -837,7 +837,7 @@ class SAM3MedicalIntegrated(nn.Module):
             nn.init.zeros_(self._output_conv.bias)
         self._target_num_classes = num_classes
         logger.debug(
-            "_output_conv 初始化完成（%d->%d），bias=0（已清零，先验由 medical_seg_head 注入）",
+            "_output_conv 初始化完成（%d->%d），bias=0",
             num_classes, num_classes,
         )
 
@@ -856,15 +856,13 @@ class SAM3MedicalIntegrated(nn.Module):
             bottleneck_dim=256,
         )
 
-        # 11. 终极修复：1x1 门面映射层 + 绝对零度隔离 (Zero-Init)
+        # 11. 1x1 输出映射层
         # ──────────────────────────────────────────────────────────────
         # 链路：SAM3 raw output → _apply_output_conv → medical_seg_head → raw logits
         #
-        # Zero-Init 原理：
-        #   weight=0 保证第一轮 forward 时 SAM3 的原始输出被完全屏蔽，
-        #   medical_seg_head 输出严格等于 bias（常数先验），避免初始特征爆炸。
-        #   之后梯度流向 weight（grad = d_loss/d_output * input ≠ 0），
-        #   weight 迅速从零离开，模型开始渐进吸收 SAM3 特征。
+        # 恒等映射保留 SAM3 原始输出的空间变化，使首个分割损失即可更新
+        # 分割头和上游视觉参数。零映射会把 logits 固定为常数先验，在稀疏
+        # 前景中被 BCE 推向全背景。
         #
         # 激活约束（BraTS WT/TC/ET 三区域重叠，非互斥）：
         #   绝对禁止 Softmax / CrossEntropyLoss（互斥假设不成立）
@@ -872,14 +870,14 @@ class SAM3MedicalIntegrated(nn.Module):
         #   forward() 只输出原始 Logits，sigmoid 在 cream_losses.py 中执行
         # ──────────────────────────────────────────────────────────────
         self.medical_seg_head = nn.Conv2d(num_classes, num_classes, kernel_size=1)
-        _msh_bias = math.log(0.29 / (1.0 - 0.29))  # log(0.29/0.71) ≈ -0.895
         with torch.no_grad():
-            nn.init.zeros_(self.medical_seg_head.weight)
-            nn.init.constant_(self.medical_seg_head.bias, _msh_bias)
+            identity = torch.eye(num_classes).unsqueeze(-1).unsqueeze(-1)
+            self.medical_seg_head.weight.copy_(identity)
+            nn.init.zeros_(self.medical_seg_head.bias)
         logger.info(
             "[SAM3MedicalIntegrated Init] medical_seg_head: %dch -> %dch "
-            "(Zero-Init weight, bias=%.3f, prior=sigmoid(bias)=%.1f%%)",
-            num_classes, num_classes, _msh_bias, 100.0 * 0.29,
+            "(identity weight, zero bias)",
+            num_classes, num_classes,
         )
 
         # Monitor 计数器初始化（由 federated_trainer 在每轮开始时赋值为 round_num）

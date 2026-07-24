@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.federated_trainer import compute_gradient_conflict_from_vectors
 from src.client import BaseClientTrainer
+from src.cream_losses import BraTSDiceBCELoss
 from src.integrated_model import FederatedOutput, SAM3MedicalIntegrated
 
 
@@ -174,6 +175,42 @@ class TestTextFusionImpact:
         assert torch.equal(output, raw_logits)
         assert raw_logits.grad is not None
         assert torch.equal(raw_logits.grad, torch.ones_like(raw_logits))
+
+    def test_sparse_foreground_slice_stays_nonempty_after_ten_segmentation_steps(self):
+        """A fixed sparse foreground slice must not collapse to all background."""
+        model = SAM3MedicalIntegrated(
+            img_size=16,
+            num_classes=3,
+            use_sam3=False,
+            freeze_encoder=False,
+            use_adapter=False,
+            embed_dim=64,
+        )
+        target = torch.zeros(1, 3, 16, 16, dtype=torch.float32)
+        target[:, 0, 4:12, 4:12] = 1.0
+        target[:, 1, 6:10, 6:10] = 1.0
+        target[:, 2, 7:9, 7:9] = 1.0
+        raw_logits = torch.full((1, 3, 16, 16), -1.0)
+        raw_logits[target.bool()] = 1.0
+        model._forward_mock_sam3 = (
+            lambda images, return_features, text_features, global_text_rep:
+            FederatedOutput(logits=raw_logits)
+        )
+        criterion = BraTSDiceBCELoss(
+            dice_weight=1.0,
+            bce_weight=1.0,
+            smooth=1.0,
+        )
+        optimizer = torch.optim.AdamW(model.medical_seg_head.parameters(), lr=1e-3)
+
+        for _ in range(10):
+            optimizer.zero_grad()
+            logits = model(torch.ones(1, 3, 16, 16))["logits"]
+            criterion(logits, target).backward()
+            optimizer.step()
+
+        predicted_foreground = torch.sigmoid(logits) >= 0.5
+        assert predicted_foreground[:, 0].any()
 
     def test_text_fusion_impact(self, model_config, device):
         """
