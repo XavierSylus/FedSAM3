@@ -6,6 +6,7 @@ FedSAM3-Cream 联邦学习配置管理器
 """
 
 import argparse
+import hashlib
 import math
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -116,6 +117,11 @@ class FederatedConfig:
     
     use_amp: bool = True
     """是否使用自动混合精度训练（Automatic Mixed Precision）"""
+
+    deterministic_algorithms: bool = True
+    deterministic_warn_only: bool = False
+    config_source_path: Optional[str] = None
+    config_source_sha256: Optional[str] = None
     
     use_mock: bool = False
     """是否使用Mock SAM3模型（用于测试或当真实权重不可用时）"""
@@ -280,6 +286,10 @@ class FederatedConfig:
             raise ValueError(f"proxy_k_batches 必须大于 0，当前值: {self.proxy_k_batches}")
         if self.seed < 0:
             raise ValueError(f"seed must be >= 0, got {self.seed}")
+        if self.deterministic_algorithms is not True:
+            raise ValueError("deterministic_algorithms must be True for strict experiments")
+        if self.deterministic_warn_only is not False:
+            raise ValueError("deterministic_warn_only must be False for strict experiments")
         allowed_baselines = {"none", "fedprox"}
         if self.baseline_method not in allowed_baselines:
             raise ValueError(
@@ -447,8 +457,8 @@ class FederatedConfig:
         if not load_path.exists():
             raise FileNotFoundError(f"配置文件不存在: {load_path}")
 
-        with open(load_path, 'r', encoding='utf-8') as f:
-            config_dict = yaml.safe_load(f)
+        raw_yaml = load_path.read_bytes()
+        config_dict = yaml.safe_load(raw_yaml.decode('utf-8'))
 
         # 展平嵌套的配置字典
         flattened = {}
@@ -656,8 +666,22 @@ class FederatedConfig:
             flattened['device'] = config_dict['device']
         if 'seed' in config_dict:
             flattened['seed'] = config_dict['seed']
-        if 'system' in config_dict and 'seed' in config_dict['system']:
-            flattened['seed'] = config_dict['system']['seed']
+        if 'system' in config_dict:
+            system = config_dict['system']
+            if not isinstance(system, dict):
+                raise ValueError("system config must be a dictionary")
+            if 'seed' in system:
+                flattened['seed'] = system['seed']
+            flattened['deterministic_algorithms'] = system.get(
+                'deterministic_algorithms',
+                True,
+            )
+            flattened['deterministic_warn_only'] = system.get(
+                'deterministic_warn_only',
+                False,
+            )
+        flattened['config_source_path'] = str(load_path.resolve())
+        flattened['config_source_sha256'] = hashlib.sha256(raw_yaml).hexdigest()
 
         print(f"[OK] YAML配置已加载: {load_path}")
         return cls(**flattened)

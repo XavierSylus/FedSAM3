@@ -1,0 +1,58 @@
+iteration_id: phase-1k-a-20260724-001
+base_commit: b4308583dd0ba197840767806751003c92069d66
+target_remote: origin
+target_branch: main
+scope:
+  requirement_ids:
+    - 1K
+  files_to_modify:
+    - src/config_manager.py
+    - src/federated_trainer.py
+    - tests/test_reproducibility_contract.py
+  files_to_add:
+    - docs/iterations/phase-1k-a-20260724-001.yaml
+  files_to_delete: []
+  approved_file_limit_exception: user-approved iteration record in addition to the three implementation files
+contracts_affected:
+  - strict experiments require deterministic PyTorch algorithms with warn-only disabled
+  - the raw YAML configuration SHA256 is required in run metadata
+  - run metadata records Python, NumPy, PyTorch, CUDA, cuDNN, GPU, AMP, and deterministic settings
+data_flow:
+  input:
+    - YAML configuration bytes
+    - configured random seed and deterministic settings
+    - runtime PyTorch and CUDA environment
+  transformation:
+    - hash raw YAML bytes with SHA256 during configuration loading
+    - apply configured deterministic algorithms when initializing the environment
+    - collect seed, AMP, cuDNN, GPU, and configuration provenance metadata
+  output:
+    - run_metadata.json
+    - training_history run_metadata
+side_effects:
+  - non-deterministic or warn-only configuration is rejected
+  - strict runs without raw YAML SHA256 are rejected
+  - data-order and slice-generator determinism remain Phase 1K-B scope
+acceptance_tests:
+  - raw YAML SHA256 and deterministic fields are retained by config loading
+  - non-strict deterministic settings fail
+  - run metadata contains seed, AMP, deterministic, cuDNN, GPU, and config SHA fields
+static_validation:
+  - Python AST parsing for changed source and test definitions
+  - source-level checks for strict deterministic settings and metadata fields
+  - YAML parsing for this iteration record
+  - git diff whitespace check
+  - no local test execution, training, smoke run, model forward, or model backward
+known_followups:
+  - phase 1K-B must seed and record client-round DataLoader, public proxy, and slice-selection generators
+  - phase 1L must align all configs and experiment manifest with the strict protocol
+  - phase 1M must present obsolete legacy aggregation callers and tests for explicit migration or deletion approval
+local_prohibited_actions:
+  - training
+  - smoke_run
+  - model_forward
+  - model_backward
+backup_tag: backup/pre-phase-1k-a-20260724-001
+implementation_commit: PENDING
+origin_main_confirmed: PENDING
+status: IN_PROGRESS

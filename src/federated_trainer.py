@@ -414,6 +414,8 @@ class FederatedTrainer:
 
     def _build_run_identity(self) -> Dict[str, Any]:
         config_snapshot = self.config.to_dict()
+        config_snapshot.pop("config_source_path", None)
+        config_snapshot.pop("config_source_sha256", None)
         client_entries: List[Dict[str, Any]] = []
         if self.client_configs:
             for client_id in sorted(self.client_configs.keys(), key=self._normalize_client_id):
@@ -486,23 +488,71 @@ class FederatedTrainer:
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
-        # Prefer deterministic behavior for reproducibility.
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        deterministic_algorithms = bool(
+            getattr(self.config, "deterministic_algorithms", True)
+        )
+        deterministic_warn_only = bool(
+            getattr(self.config, "deterministic_warn_only", False)
+        )
+        torch.use_deterministic_algorithms(
+            deterministic_algorithms,
+            warn_only=deterministic_warn_only,
+        )
+        torch.backends.cudnn.deterministic = deterministic_algorithms
+        torch.backends.cudnn.benchmark = not deterministic_algorithms
         print(f"[Seed] Using random seed: {seed}")
 
     def _collect_run_metadata(self) -> Dict[str, Any]:
         run_identity = self._build_run_identity()
+        config_source_sha256 = getattr(self.config, "config_source_sha256", None)
+        if not isinstance(config_source_sha256, str) or len(config_source_sha256) != 64:
+            raise RuntimeError("Strict experiments require a YAML configuration SHA256")
+        gpu_devices = []
+        if torch.cuda.is_available():
+            for device_index in range(torch.cuda.device_count()):
+                properties = torch.cuda.get_device_properties(device_index)
+                gpu_devices.append(
+                    {
+                        "index": device_index,
+                        "name": torch.cuda.get_device_name(device_index),
+                        "capability": list(torch.cuda.get_device_capability(device_index)),
+                        "total_memory_bytes": int(properties.total_memory),
+                    }
+                )
         metadata: Dict[str, Any] = {
             "seed": int(getattr(self.config, "seed", 3407)),
+            "random_seeds": {
+                "python": int(getattr(self.config, "seed", 3407)),
+                "numpy": int(getattr(self.config, "seed", 3407)),
+                "torch": int(getattr(self.config, "seed", 3407)),
+                "cuda": int(getattr(self.config, "seed", 3407)),
+            },
             "experiment_name": getattr(self.config, "experiment_name", None),
             "python_version": platform.python_version(),
             "torch_version": torch.__version__,
             "cuda_available": bool(torch.cuda.is_available()),
             "cuda_version": torch.version.cuda,
+            "cudnn_version": torch.backends.cudnn.version(),
+            "gpu_devices": gpu_devices,
+            "amp": {
+                "enabled": bool(getattr(self.config, "use_amp", False)),
+            },
+            "determinism": {
+                "configured_algorithms": bool(
+                    getattr(self.config, "deterministic_algorithms", True)
+                ),
+                "configured_warn_only": bool(
+                    getattr(self.config, "deterministic_warn_only", False)
+                ),
+                "torch_algorithms_enabled": torch.are_deterministic_algorithms_enabled(),
+                "cudnn_deterministic": bool(torch.backends.cudnn.deterministic),
+                "cudnn_benchmark": bool(torch.backends.cudnn.benchmark),
+            },
             "device": self.device,
             "hostname": platform.node(),
             "run_started_at": datetime.now().isoformat(),
+            "config_source_path": getattr(self.config, "config_source_path", None),
+            "config_file_sha256": config_source_sha256,
             "config_hash": run_identity["config_hash"],
             "protocol_hash": run_identity["protocol_hash"],
             "protocol_payload": run_identity["protocol_payload"],
