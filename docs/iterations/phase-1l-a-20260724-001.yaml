@@ -1,0 +1,48 @@
+iteration_id: phase-1l-a-20260724-001
+base_commit: 0634b4939eb18eb308cbd578987fce142253387c
+target_remote: origin
+target_branch: main
+scope:
+  requirement_ids:
+    - 1L
+  files_to_modify:
+    - configs/fedsam3_2x2_u_fedavg.yaml
+    - configs/fedsam3_2x2_u_fedprox.yaml
+    - configs/fedsam3_2x2_r_fedavg.yaml
+  files_to_add:
+    - docs/iterations/phase-1l-a-20260724-001.yaml
+  files_to_delete: []
+  approved_file_limit_exception: user-approved iteration record in addition to the three configuration files
+contracts_affected:
+  - strict experiments explicitly require deterministic algorithms with warn-only disabled
+  - strict experiment YAMLs declare single-process data loading and disabled persistent workers
+  - U experiments retain unrestricted routing and include-zero updates
+  - R experiments retain restricted routing and exclude-and-renormalize updates
+data_flow:
+  input:
+    - experiment YAML
+  transformation:
+    - make deterministic execution and worker settings explicit
+  output:
+    - resolved strict experiment configuration
+side_effects:
+  - the three configuration files now match the single-process loader contract
+acceptance_tests:
+  - YAML parses successfully
+  - routing mode, zero-update policy, and private-case sample unit match the experiment cell
+  - deterministic algorithms are true, warn-only is false, and worker count is zero
+static_validation:
+  - YAML parsing and contract assertions
+  - git diff whitespace check
+  - no local test execution, training, smoke run, model forward, or model backward
+known_followups:
+  - phase 1L-B must update the R-FedProx and 2-of-3 YAMLs plus the experiment manifest
+local_prohibited_actions:
+  - training
+  - smoke_run
+  - model_forward
+  - model_backward
+backup_tag: backup/pre-phase-1l-a-20260724-001
+implementation_commit: PENDING
+origin_main_confirmed: PENDING
+status: IN_PROGRESS
