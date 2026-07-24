@@ -1,0 +1,21 @@
+phase: 1P-C
+base_commit: b6e8a58a0a9f8fa358fd129df76c9736bcc98166
+backup_tag: backup/pre-phase-1p-c-20260724-001
+scope:
+  implementation_files:
+    - configs/fedsam3_ratio_2of3_r_fedprox.yaml
+    - configs/fedsam3_experiment_manifest.json
+    - tests/test_experiment_matrix_contract.py
+  audit_record: docs/iterations/phase-1p-c-20260724-001.yaml
+actions:
+  - align the 2-of-3 ratio configuration with best_effort_cuda
+  - record the CUDA grid-sampler reproducibility boundary in the experiment manifest
+  - require the matrix and ratio contracts to declare the same reproducibility mode
+verification:
+  - Python AST and compile checks
+  - JSON and YAML contract checks
+  - diff check excluding core_projects
+runtime_validation: deferred_to_server
+implementation_commit: 3dd15a09394a665e40b2313a43fb2354fa14f03d
+origin_main_confirmed: 3dd15a09394a665e40b2313a43fb2354fa14f03d
+status: COMPLETE
