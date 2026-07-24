@@ -1,0 +1,21 @@
+phase: 1M-D
+base_commit: 1ee772c3d1f1729af0db6444ada91b7705b60b2d
+backup_tag: backup/pre-phase-1m-d-20260724-001
+scope:
+  implementation_files:
+    - src/server_coordinator.py
+    - scripts/main_federated.py
+    - run_training.py
+  audit_record: docs/iterations/phase-1m-d-20260724-001.yaml
+actions:
+  - remove the obsolete coordinator that calls the retired aggregation API
+  - remove the dummy federated runner that calls the retired aggregation API
+  - remove the dummy launcher branch so the retained wrapper has no dependency on the retired runner
+verification:
+  - static Python parse
+  - static import and retired-call reference scan
+  - diff check
+runtime_validation: deferred_to_server
+implementation_commit: 49743ffc952ba28aac19ae8fcd33a6437e33a563
+origin_main_confirmed: 49743ffc952ba28aac19ae8fcd33a6437e33a563
+status: COMPLETE
