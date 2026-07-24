@@ -1,0 +1,18 @@
+phase: 1M-G
+base_commit: e230ad2640c9a5f6dca6e524a5b3c9f722f021a5
+backup_tag: backup/pre-phase-1m-g-20260724-001
+scope:
+  implementation_files:
+    - configs/baseline.yaml
+    - configs/exp_baseline_d_fedprox.yaml
+    - configs/ablation_c_wo_global_rep_update.yaml
+  audit_record: docs/iterations/phase-1m-g-20260724-001.yaml
+actions:
+  - remove obsolete baseline and ablation configurations outside the strict U/R matrix
+verification:
+  - static YAML inventory
+  - diff check
+runtime_validation: deferred_to_server
+implementation_commit: 1a0aafd62835fcfcde25c8a72a8d572e4367a2b7
+origin_main_confirmed: 1a0aafd62835fcfcde25c8a72a8d572e4367a2b7
+status: COMPLETE
