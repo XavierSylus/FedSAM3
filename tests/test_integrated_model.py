@@ -140,6 +140,25 @@ class TestTextFusionImpact:
                 embed_dim=64,
             )
 
+    def test_segmentation_head_does_not_assume_raw_channel_identity(self):
+        torch.manual_seed(3407)
+        model = SAM3MedicalIntegrated(
+            img_size=16,
+            num_classes=3,
+            use_sam3=False,
+            freeze_encoder=False,
+            use_adapter=False,
+            embed_dim=64,
+        )
+
+        identity = torch.eye(3).unsqueeze(-1).unsqueeze(-1)
+        assert not torch.equal(model.medical_seg_head.weight.detach(), identity)
+        assert torch.count_nonzero(model.medical_seg_head.weight) > 3
+        assert torch.equal(
+            model.medical_seg_head.bias.detach(),
+            torch.zeros_like(model.medical_seg_head.bias),
+        )
+
     def test_forward_preserves_raw_logits_and_their_gradients(self):
         model = SAM3MedicalIntegrated(
             img_size=16,
