@@ -52,6 +52,11 @@ from src.update_diagnostics import (
     compute_parameter_group_diagnostics,
     flatten_parameter_group_diagnostics,
 )
+from src.parameter_groups import (
+    PARAMETER_GROUPS,
+    allowed_modalities,
+    classify_trainable_parameters,
+)
 from data.heterogeneous_dataset_loader import create_heterogeneous_data_loaders
 from data_processing.brats_region_contract import (
     logits_to_brats_labels,
@@ -85,7 +90,9 @@ def create_client_trainer(modality: str, **kwargs):
             f"未知的客户端模态类型: '{modality}'，"
             f"有效值为 {list(modality_map.keys())}"
         )
-    return trainer_cls(**kwargs)
+    trainer = trainer_cls(**kwargs)
+    trainer.client_modality = modality
+    return trainer
 
 
 def compute_gradient_conflict_from_vectors(
@@ -183,6 +190,7 @@ class FederatedTrainer:
             'round_time_sec': [],      # 每轮完整训练耗时（秒）
             'grad_conflict_deg': [],   # adapter 梯度冲突角（度），无图像或多模态对时记录 None
             'parameter_group_diagnostics': [],
+            'parameter_group_effectiveness': [],
             'aggregation_audits': [],
         }
         self.last_val_metrics = {}
@@ -1023,6 +1031,109 @@ class FederatedTrainer:
                 writer.writeheader()
             writer.writerows(rows)
 
+    def _finalize_parameter_group_effectiveness(
+        self,
+        client_reports: Dict[str, Dict[str, Any]],
+        client_modalities: Dict[str, str],
+        aggregation_audit: Dict[str, Any],
+        aggregated_state: Dict[str, torch.Tensor],
+    ) -> Dict[str, Dict[str, Any]]:
+        active_client_ids = aggregation_audit.get("active_client_ids")
+        parameter_audit = aggregation_audit.get("parameters")
+        if not isinstance(active_client_ids, list) or not isinstance(parameter_audit, dict):
+            raise RuntimeError("Aggregation audit is missing active clients or parameter entries")
+        if set(active_client_ids) != set(client_reports):
+            raise RuntimeError("Parameter group reports do not match aggregation clients")
+        if set(active_client_ids) != set(client_modalities):
+            raise RuntimeError("Aggregation modalities do not match aggregation clients")
+        if set(parameter_audit) != set(aggregated_state):
+            raise RuntimeError("Aggregation audit keys do not match aggregated parameters")
+
+        routing_mode = aggregation_audit.get("routing_mode")
+        if routing_mode != self.config.routing_mode:
+            raise RuntimeError("Aggregation audit routing mode does not match configuration")
+        parameter_groups = classify_trainable_parameters(parameter_audit)
+
+        for client_id in active_client_ids:
+            report = client_reports[client_id]
+            if report.get("modality") != client_modalities[client_id]:
+                raise RuntimeError(f"Client modality mismatch in effectiveness report: {client_id}")
+            groups = report.get("groups")
+            if not isinstance(groups, dict) or set(groups) != set(PARAMETER_GROUPS):
+                raise RuntimeError(f"Client effectiveness groups are incomplete: {client_id}")
+
+        for parameter_name in sorted(parameter_audit):
+            entry = parameter_audit[parameter_name]
+            parameter_group = parameter_groups[parameter_name]
+            if entry.get("parameter_group") != parameter_group:
+                raise RuntimeError(
+                    f"Aggregation audit parameter group mismatch: {parameter_name}"
+                )
+            eligible_client_ids = entry.get("eligible_client_ids")
+            normalized_weights = entry.get("normalized_weights")
+            if not isinstance(eligible_client_ids, list) or not isinstance(normalized_weights, dict):
+                raise RuntimeError(f"Aggregation audit entry is incomplete: {parameter_name}")
+            if len(eligible_client_ids) != len(set(eligible_client_ids)):
+                raise RuntimeError(f"Aggregation audit has duplicate eligible client: {parameter_name}")
+            if not set(eligible_client_ids).issubset(active_client_ids):
+                raise RuntimeError(f"Aggregation audit has unknown eligible client: {parameter_name}")
+            if routing_mode == "unrestricted":
+                if set(eligible_client_ids) != set(active_client_ids):
+                    raise RuntimeError(
+                        f"Unrestricted aggregation excluded an active client: {parameter_name}"
+                    )
+            else:
+                allowed = allowed_modalities(parameter_group)
+                for client_id in eligible_client_ids:
+                    if client_modalities[client_id] not in allowed:
+                        raise RuntimeError(
+                            "Restricted aggregation admitted a routing-ineligible client: "
+                            f"{client_id}:{parameter_name}"
+                        )
+            if set(normalized_weights) != set(eligible_client_ids):
+                raise RuntimeError(f"Aggregation weights do not match eligible clients: {parameter_name}")
+
+            for client_id in eligible_client_ids:
+                normalized_weight = normalized_weights[client_id]
+                if not isinstance(normalized_weight, (int, float)) or normalized_weight <= 0.0:
+                    raise RuntimeError(
+                        f"Aggregation has an invalid normalized weight: {client_id}:{parameter_name}"
+                    )
+                group_report = client_reports[client_id]["groups"][parameter_group]
+                group_report["aggregation_eligible_count"] += 1
+                group_report["aggregated_count"] += 1
+
+        for client_id in active_client_ids:
+            for parameter_group in PARAMETER_GROUPS:
+                group_report = client_reports[client_id]["groups"][parameter_group]
+                if group_report["aggregated_count"] > group_report["aggregation_eligible_count"]:
+                    raise RuntimeError(
+                        f"Aggregation count exceeds eligibility: {client_id}:{parameter_group}"
+                    )
+                group_report["aggregation_eligible"] = (
+                    group_report["aggregation_eligible_count"] > 0
+                )
+                group_report["aggregated"] = group_report["aggregated_count"] > 0
+        return client_reports
+
+    def _persist_parameter_group_effectiveness(
+        self,
+        round_num: int,
+        client_reports: Dict[str, Dict[str, Any]],
+    ) -> None:
+        output_dir = Path(self.config.log_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / "parameter_group_effectiveness.jsonl"
+        with output_path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {"round": round_num, "clients": client_reports},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+
 
     def _train_single_round(self, round_num: int):
         """执行单轮联邦训练"""
@@ -1037,6 +1148,7 @@ class FederatedTrainer:
         round_client_updates = {}
         round_client_stats = {}
         round_client_grad_vectors = {}
+        round_client_effectiveness = {}
         fedprox_mode = str(getattr(self.config, 'baseline_method', 'none')).lower() == 'fedprox'
         round_global_state = self.server.get_trainable_parameter_snapshot()
         round_buffer_snapshot = self.server.capture_round_buffer_snapshot()
@@ -1251,6 +1363,13 @@ class FederatedTrainer:
                             f"Client {client_id} produced a non-finite parameter delta: "
                             f"{parameter_name}"
                         )
+                client_effectiveness = trainer.collect_parameter_group_effectiveness(
+                    model=self.global_model,
+                    round_global_state=round_global_state,
+                    uploaded_state=updated_weights,
+                )
+                client_effectiveness["client_id"] = client_id
+                round_client_effectiveness[client_id] = client_effectiveness
 
                 print(
                     f"      Loss: {stats.get('avg_loss', 0):.4f}, "
@@ -1346,6 +1465,16 @@ class FederatedTrainer:
         aggregation_audit = getattr(self.server, "_last_aggregation_audit", None)
         if not isinstance(aggregation_audit, dict):
             raise RuntimeError("Server did not produce the required aggregation audit")
+        round_client_effectiveness = self._finalize_parameter_group_effectiveness(
+            client_reports=round_client_effectiveness,
+            client_modalities=client_modality_map,
+            aggregation_audit=aggregation_audit,
+            aggregated_state=aggregated_state,
+        )
+        self._persist_parameter_group_effectiveness(
+            round_num,
+            round_client_effectiveness,
+        )
 
         round_group_diagnostics = compute_parameter_group_diagnostics(
             round_global_state=round_global_state,
@@ -1419,6 +1548,9 @@ class FederatedTrainer:
         })
         self.training_history['parameter_group_diagnostics'].append(
             round_group_diagnostics
+        )
+        self.training_history['parameter_group_effectiveness'].append(
+            {"round": round_num, "clients": round_client_effectiveness}
         )
         self.training_history['global_text_rep_norms'].append(
             updated_global_reps['global_text_rep'].norm().item()

@@ -1,0 +1,62 @@
+iteration_id: phase-1h-a-20260724-001
+base_commit: e7201e3324d83d54f7e4abfca37c43d46d81bb61
+target_remote: origin
+target_branch: main
+scope:
+  requirement_ids:
+    - 1H
+  files_to_modify:
+    - src/client.py
+    - src/federated_trainer.py
+    - tests/test_parameter_group_effectiveness.py
+  files_to_add:
+    - docs/iterations/phase-1h-a-20260724-001.yaml
+  files_to_delete: []
+  approved_file_limit_exception: user-approved iteration record in addition to the three implementation files
+contracts_affected:
+  - every parameter group records model presence, optimizer scope, gradient observation, nonzero gradient, delta, upload, aggregation eligibility, and aggregation use
+  - model groups that are absent are recorded as not_present rather than synthetic zero-parameter groups
+  - expected active optimizer groups require at least one finite nonzero gradient per client round
+  - uploads, deltas, and server routing are cross-checked against the strict parameterwise aggregation contract
+data_flow:
+  input:
+    - named trainable model parameters
+    - active optimizer named parameters
+    - pre-step gradients
+    - round-global parameter snapshot
+    - optimizer-scoped upload dictionary
+    - server per-parameter aggregation audit
+  transformation:
+    - classify every trainable parameter into the five named groups
+    - accumulate unique parameters with grad is not None and finite nonzero gradient before optimizer zero_grad
+    - compute upload deltas and derive server eligibility/aggregation from the audit
+  output:
+    - per-client, per-group effectiveness record retained in training history and JSONL
+side_effects:
+  - any unclassified trainable parameter, optimizer/upload mismatch, nonzero delta without upload, missing expected optimizer group, all-none gradient group, or routing-ineligible aggregation raises immediately
+  - detailed nonzero-gradient validity remains a server preflight gate; no local training or forward/backward execution is performed
+acceptance_tests:
+  - absent groups are marked not_present without fabricated parameter counts
+  - a real optimizer group with all grad None or no finite nonzero gradient fails
+  - nonzero delta without upload fails
+  - restricted aggregation never marks a modality-disallowed client eligible or aggregated
+  - unrestricted aggregation records all active clients as parameter eligible, including zero-update dilution
+static_validation:
+  - Python AST parsing for changed source and test definitions
+  - source-level checks for all eight effectiveness fields and fail-fast paths
+  - YAML parsing for this iteration record
+  - git diff whitespace check
+  - no local test execution, training, smoke run, model forward, or model backward
+known_followups:
+  - phase 1I must revise update conflict and drift to use only shared real optimizer uploads
+  - phase 1K must persist all deterministic data, sampler, slice, augmentation, and client-order states
+  - phase 1M must present obsolete legacy aggregation callers and tests for explicit migration or deletion approval
+local_prohibited_actions:
+  - training
+  - smoke_run
+  - model_forward
+  - model_backward
+backup_tag: backup/pre-phase-1h-a-20260724-001
+implementation_commit: PENDING
+origin_main_confirmed: PENDING
+status: IN_PROGRESS
