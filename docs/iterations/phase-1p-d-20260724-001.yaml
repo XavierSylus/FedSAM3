@@ -1,0 +1,20 @@
+phase: 1P-D
+base_commit: 39acb1bb0972c56257072882859b666ee2bf6c92
+backup_tag: backup/pre-phase-1p-d-20260724-001
+scope:
+  implementation_files:
+    - src/federated_trainer.py
+    - tests/test_reproducibility_contract.py
+  audit_record: docs/iterations/phase-1p-d-20260724-001.yaml
+actions:
+  - write reproducibility mode and bitwise guarantee into run metadata
+  - record the known grid-sampler CUDA operation for best_effort_cuda runs
+  - cover strict and best-effort metadata contracts
+verification:
+  - Python AST and compile checks
+  - metadata field static contract check
+  - diff check excluding core_projects
+runtime_validation: deferred_to_server
+implementation_commit: 6dab79a4e25c86b54c9d93d87489ff95325bca89
+origin_main_confirmed: 6dab79a4e25c86b54c9d93d87489ff95325bca89
+status: COMPLETE
