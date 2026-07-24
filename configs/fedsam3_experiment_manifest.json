@@ -87,7 +87,8 @@
       "ET"
     ],
     "label_mapping": "BraTS 0/1/2/4 to [WT, TC, ET] and nested [WT, TC, ET] to BraTS 0/1/2/4",
-    "loss": "DiceLoss + BCEWithLogitsLoss",
+    "loss": "DiceLoss + per-batch per-channel balanced BCEWithLogitsLoss",
+    "bce_positive_weighting": "pos_weight_c = N_c_negative / N_c_positive when N_c_positive > 0; use 1 when N_c_positive = 0 because the positive BCE term is absent",
     "thresholds": {
       "WT": 0.5,
       "TC": 0.5,

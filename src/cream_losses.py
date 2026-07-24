@@ -733,7 +733,7 @@ class TverskyLoss(nn.Module):
 
 
 class BraTSDiceBCELoss(nn.Module):
-    """Weighted soft-Dice plus BCEWithLogits for overlapping [WT, TC, ET]."""
+    """Weighted soft-Dice plus per-channel balanced BCE for [WT, TC, ET]."""
 
     def __init__(
         self,
@@ -796,5 +796,17 @@ class BraTSDiceBCELoss(nn.Module):
         dice_loss = 1.0 - (
             (2.0 * intersection + self.smooth) / (denominator + self.smooth)
         ).mean()
-        bce_loss = F.binary_cross_entropy_with_logits(logits, target)
+        positive_count = target.sum(dim=(0, 2, 3))
+        channel_size = target.shape[0] * target.shape[2] * target.shape[3]
+        negative_count = channel_size - positive_count
+        positive_weight = torch.where(
+            positive_count > 0.0,
+            negative_count / positive_count,
+            torch.ones_like(positive_count),
+        ).view(1, len(REGION_NAMES), 1, 1)
+        bce_loss = F.binary_cross_entropy_with_logits(
+            logits,
+            target,
+            pos_weight=positive_weight,
+        )
         return self.dice_weight * dice_loss + self.bce_weight * bce_loss
