@@ -12,6 +12,20 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CLIENT_PATH = PROJECT_ROOT / "src" / "client.py"
 
 
+class _ContractTrainer(BaseClientTrainer):
+    def unpack_private_batch(self, batch):
+        raise NotImplementedError
+
+    def unpack_public_batch(self, batch):
+        raise NotImplementedError
+
+    def compute_loss(self, model, private_inputs, public_inputs, global_reps, lambda_cream):
+        raise NotImplementedError
+
+    def get_return_values(self, model, local_reps, training_stats):
+        raise NotImplementedError
+
+
 class _FedProxModel(nn.Module):
     def __init__(self):
         super().__init__()
@@ -20,7 +34,7 @@ class _FedProxModel(nn.Module):
 
 
 def _trainer(model, optimizer, baseline_method, fedprox_mu):
-    trainer = object.__new__(BaseClientTrainer)
+    trainer = object.__new__(_ContractTrainer)
     trainer.device = "cpu"
     trainer.baseline_method = baseline_method
     trainer.fedprox_mu = fedprox_mu
