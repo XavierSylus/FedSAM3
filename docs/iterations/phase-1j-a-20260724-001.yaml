@@ -1,0 +1,60 @@
+iteration_id: phase-1j-a-20260724-001
+base_commit: 0b8972f11f44591f77e7651b08852f54511cac3e
+target_remote: origin
+target_branch: main
+scope:
+  requirement_ids:
+    - 1J
+  files_to_modify:
+    - src/client.py
+    - tests/test_fedprox_same_loss_contract.py
+  files_to_add:
+    - docs/iterations/phase-1j-a-20260724-001.yaml
+  files_to_delete: []
+  approved_file_limit_exception: user-approved iteration record in addition to the two implementation files
+contracts_affected:
+  - FedAvg and FedProx share the same modality-specific task loss
+  - FedProx adds only the optimizer-scoped proximal term against the round-global reference
+  - mu equals zero has zero proximal loss and preserves task-loss gradients
+data_flow:
+  input:
+    - modality-specific task loss
+    - active optimizer parameter names
+    - round-global parameter reference
+    - FedProx mu
+  transformation:
+    - calculate task loss before the proximal term
+    - validate optimizer scope and round-global reference before applying FedProx
+    - calculate proximal loss on exactly the active optimizer parameter set
+  output:
+    - objective loss
+    - task loss statistics
+    - proximal loss statistics
+side_effects:
+  - FedProx without a round-global reference or with a mismatched parameter scope raises immediately
+  - no data, forward path, optimizer parameter group, or server aggregation formula is changed
+acceptance_tests:
+  - FedAvg and FedProx task losses and initial gradients are identical
+  - initial proximal term is zero
+  - shifted optimizer parameters match the proximal formula
+  - non-optimizer parameters are rejected
+  - mu zero matches FedAvg gradient
+static_validation:
+  - Python AST parsing for changed source and test definitions
+  - source-level checks for task/proximal separation and scope validation
+  - YAML parsing for this iteration record
+  - git diff whitespace check
+  - no local test execution, training, smoke run, model forward, or model backward
+known_followups:
+  - phase 1K must persist deterministic data, sampler, slice, augmentation, and client-order states
+  - phase 1L must align all configs and experiment manifest with the strict protocol
+  - phase 1M must present obsolete legacy aggregation callers and tests for explicit migration or deletion approval
+local_prohibited_actions:
+  - training
+  - smoke_run
+  - model_forward
+  - model_backward
+backup_tag: backup/pre-phase-1j-a-20260724-001
+implementation_commit: PENDING
+origin_main_confirmed: PENDING
+status: IN_PROGRESS

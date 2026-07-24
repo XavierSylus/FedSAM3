@@ -165,6 +165,8 @@ class BaseClientTrainer(ABC):
 
         self.training_stats = {
             'total_loss': 0.0,
+            'task_loss': 0.0,
+            'proximal_loss': 0.0,
             'seg_loss': 0.0,
             'cream_loss': 0.0,
             'non_seg_component': 0.0,
@@ -784,6 +786,8 @@ class BaseClientTrainer(ABC):
         # 初始化统计和迭代器
         self.training_stats = {
             'total_loss': 0.0,
+            'task_loss': 0.0,
+            'proximal_loss': 0.0,
             'seg_loss': 0.0,
             'cream_loss': 0.0,
             'non_seg_component': 0.0,
@@ -791,11 +795,12 @@ class BaseClientTrainer(ABC):
         }
         self._reset_round_diagnostics()
         local_public_reps_list = []
-        fedprox_param_names = (
-            self.get_active_optimizer_parameter_names()
-            if self.baseline_method == "fedprox" and global_reference_state
-            else set()
-        )
+        if self.baseline_method == "fedprox":
+            if global_reference_state is None:
+                raise RuntimeError("FedProx requires a round-global reference state")
+            fedprox_param_names = self.get_active_optimizer_parameter_names()
+        else:
+            fedprox_param_names = set()
 
         private_iter = iter(self.private_loader)
         public_iter = iter(self.public_loader) if self.public_loader is not None else None
@@ -840,17 +845,17 @@ class BaseClientTrainer(ABC):
 
             # Step 3: 计算损失（多态调用）
             with autocast(device_type='cuda', enabled=self.use_amp) if self.device == 'cuda' else autocast(device_type='cpu', enabled=False):
-                total_loss, seg_loss, cream_loss, public_rep = self.compute_loss(
+                task_loss, seg_loss, cream_loss, public_rep = self.compute_loss(
                     model, private_inputs, public_inputs,
                     {'text': global_text_rep, 'image': global_image_rep},
                     lambda_cream
                 )
-            if fedprox_param_names:
-                total_loss = total_loss + self._compute_fedprox_penalty(
-                    model=model,
-                    global_reference_state=global_reference_state,
-                    fedprox_param_names=fedprox_param_names,
-                )
+            proximal_loss = self._compute_fedprox_penalty(
+                model=model,
+                global_reference_state=global_reference_state,
+                fedprox_param_names=fedprox_param_names,
+            )
+            total_loss = task_loss + proximal_loss
             if isinstance(self._last_multimodal_cream_diag, dict):
                 self._record_cream_diag_step(self._last_multimodal_cream_diag)
 
@@ -867,11 +872,15 @@ class BaseClientTrainer(ABC):
                 local_public_reps_list.append(public_rep.detach().cpu())
 
             total_loss_val = total_loss.item()
+            task_loss_val = task_loss.item()
+            proximal_loss_val = proximal_loss.item()
             seg_loss_val = seg_loss.item() if isinstance(seg_loss, torch.Tensor) else float(seg_loss)
             self.training_stats['total_loss'] += total_loss_val
+            self.training_stats['task_loss'] += task_loss_val
+            self.training_stats['proximal_loss'] += proximal_loss_val
             self.training_stats['seg_loss'] += seg_loss_val
             self.training_stats['cream_loss'] += cream_loss.item()
-            self.training_stats['non_seg_component'] += (total_loss_val - seg_loss_val)
+            self.training_stats['non_seg_component'] += (task_loss_val - seg_loss_val)
             self.training_stats['num_batches'] += 1
 
         # 聚合本地表征
@@ -890,24 +899,36 @@ class BaseClientTrainer(ABC):
         global_reference_state: Optional[Dict[str, torch.Tensor]],
         fedprox_param_names: set,
     ) -> torch.Tensor:
-        """Compute the FedProx proximal penalty over uploadable trainable params."""
-        if (
-            self.baseline_method != "fedprox"
-            or self.fedprox_mu <= 0
-            or not global_reference_state
-            or not fedprox_param_names
-        ):
+        """Compute the FedProx proximal penalty over exactly the optimizer scope."""
+        if self.baseline_method != "fedprox":
             return torch.tensor(0.0, device=self.device)
+        if self.fedprox_mu < 0:
+            raise ValueError("FedProx mu must be non-negative")
+        optimizer_parameter_names = self.get_active_optimizer_parameter_names()
+        if set(fedprox_param_names) != set(optimizer_parameter_names):
+            raise RuntimeError(
+                "FedProx parameters must equal the active optimizer parameter keys"
+            )
+        if self.fedprox_mu == 0:
+            return torch.tensor(0.0, device=self.device)
+        if global_reference_state is None:
+            raise RuntimeError("FedProx requires a round-global reference state")
 
+        named_parameters = dict(model.named_parameters())
         proximal_term = torch.tensor(0.0, device=self.device)
-        for name, param in model.named_parameters():
-            if not param.requires_grad or name not in fedprox_param_names:
-                continue
+        for name in sorted(optimizer_parameter_names):
+            param = named_parameters.get(name)
+            if param is None or not param.requires_grad:
+                raise RuntimeError(
+                    f"FedProx optimizer parameter is unavailable in the model: {name}"
+                )
             global_param = global_reference_state.get(name)
             if global_param is None:
                 raise KeyError(
                     f"FedProx round-global reference is missing optimizer parameter: {name}"
                 )
+            if param.shape != global_param.shape:
+                raise ValueError(f"FedProx reference shape mismatch: {name}")
             proximal_term = proximal_term + torch.sum(
                 (param - global_param.to(self.device)) ** 2
             )
@@ -1086,6 +1107,8 @@ class BaseClientTrainer(ABC):
         num_batches = self.training_stats['num_batches']
         return {
             'avg_loss': self.training_stats['total_loss'] / num_batches if num_batches > 0 else 0.0,
+            'avg_task_loss': self.training_stats['task_loss'] / num_batches if num_batches > 0 else 0.0,
+            'avg_proximal_loss': self.training_stats['proximal_loss'] / num_batches if num_batches > 0 else 0.0,
             'avg_seg_loss': self.training_stats['seg_loss'] / num_batches if num_batches > 0 else 0.0,
             'avg_cream_loss': self.training_stats['cream_loss'] / num_batches if num_batches > 0 else 0.0,
             'avg_non_seg_component': self.training_stats['non_seg_component'] / num_batches if num_batches > 0 else 0.0,
