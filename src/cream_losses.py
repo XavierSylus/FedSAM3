@@ -795,7 +795,7 @@ class BraTSDiceBCELoss(nn.Module):
         denominator = probabilities.sum(dim=(2, 3)) + target.sum(dim=(2, 3))
         numerator = 2.0 * intersection + self.smooth
         dice_denominator = denominator + self.smooth
-        dice_loss_by_channel = 1.0 - (numerator / dice_denominator).mean(dim=0)
+        dice_loss = 1.0 - (numerator / dice_denominator).mean()
         positive_count = target.sum(dim=(0, 2, 3))
         channel_size = target.shape[0] * target.shape[2] * target.shape[3]
         negative_count = channel_size - positive_count
@@ -804,12 +804,11 @@ class BraTSDiceBCELoss(nn.Module):
             negative_count / positive_count,
             torch.ones_like(positive_count),
         ).view(1, len(REGION_NAMES), 1, 1)
-        bce_loss_by_channel = F.binary_cross_entropy_with_logits(
+        bce_loss = F.binary_cross_entropy_with_logits(
             logits,
             target,
             pos_weight=positive_weight,
-            reduction="none",
-        ).mean(dim=(0, 2, 3))
+        )
         probability_gradient = probabilities.detach() * (1.0 - probabilities.detach())
         dice_logit_gradient = -(
             (2.0 * target * dice_denominator.unsqueeze(-1).unsqueeze(-1))
@@ -823,16 +822,10 @@ class BraTSDiceBCELoss(nn.Module):
             * torch.where(target > 0.0, positive_weight, torch.ones_like(positive_weight))
             / logits.numel()
         )
-        dice_gradient_norm = torch.linalg.vector_norm(
-            dice_logit_gradient, dim=(0, 2, 3)
-        )
-        bce_gradient_norm = torch.linalg.vector_norm(
-            bce_logit_gradient, dim=(0, 2, 3)
-        )
+        dice_gradient_norm = torch.linalg.vector_norm(dice_logit_gradient)
+        bce_gradient_norm = torch.linalg.vector_norm(bce_logit_gradient)
         bce_scale = (
             dice_gradient_norm
             / bce_gradient_norm.clamp_min(torch.finfo(logits.dtype).eps)
         ).detach()
-        return self.dice_weight * dice_loss_by_channel.mean() + self.bce_weight * (
-            bce_scale * bce_loss_by_channel
-        ).mean()
+        return self.dice_weight * dice_loss + self.bce_weight * bce_scale * bce_loss
