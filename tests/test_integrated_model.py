@@ -140,8 +140,7 @@ class TestTextFusionImpact:
                 embed_dim=64,
             )
 
-    def test_segmentation_head_does_not_assume_raw_channel_identity(self):
-        torch.manual_seed(3407)
+    def test_segmentation_head_uses_positive_nonsemantic_mean_initialization(self):
         model = SAM3MedicalIntegrated(
             img_size=16,
             num_classes=3,
@@ -151,13 +150,20 @@ class TestTextFusionImpact:
             embed_dim=64,
         )
 
-        identity = torch.eye(3).unsqueeze(-1).unsqueeze(-1)
-        assert not torch.equal(model.medical_seg_head.weight.detach(), identity)
-        assert torch.count_nonzero(model.medical_seg_head.weight) > 3
+        expected_weight = torch.full_like(model.medical_seg_head.weight, 1.0 / 3.0)
+        assert torch.equal(model.medical_seg_head.weight.detach(), expected_weight)
         assert torch.equal(
             model.medical_seg_head.bias.detach(),
             torch.zeros_like(model.medical_seg_head.bias),
         )
+
+        raw_logits = torch.full((1, 3, 2, 2), -4.0)
+        raw_logits[:, 0, 0, 0] = -1.0
+        raw_logits[:, 1, 0, 0] = -2.0
+        raw_logits[:, 2, 0, 0] = -3.0
+        output = model.medical_seg_head(raw_logits)
+
+        assert torch.all(output[:, :, 0, 0] > output[:, :, 0, 1])
 
     def test_forward_preserves_raw_logits_and_their_gradients(self):
         model = SAM3MedicalIntegrated(

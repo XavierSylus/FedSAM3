@@ -861,8 +861,7 @@ class SAM3MedicalIntegrated(nn.Module):
         # 链路：SAM3 raw output → _apply_output_conv → medical_seg_head → raw logits
         #
         # SAM3 原始通道是通用掩码分数，不假定它们与 WT、TC、ET 一一对应。
-        # 非恒等初始化让分割头从首步学习通道混合和符号校准，同时为上游
-        # 视觉参数保留梯度路径。
+        # 正均值初始化保留共同前景方向且不引入通道语义假设。
         #
         # 激活约束（BraTS WT/TC/ET 三区域重叠，非互斥）：
         #   绝对禁止 Softmax / CrossEntropyLoss（互斥假设不成立）
@@ -871,14 +870,11 @@ class SAM3MedicalIntegrated(nn.Module):
         # ──────────────────────────────────────────────────────────────
         self.medical_seg_head = nn.Conv2d(num_classes, num_classes, kernel_size=1)
         with torch.no_grad():
-            nn.init.kaiming_uniform_(
-                self.medical_seg_head.weight,
-                a=math.sqrt(5),
-            )
+            self.medical_seg_head.weight.fill_(1.0 / float(num_classes))
             nn.init.zeros_(self.medical_seg_head.bias)
         logger.info(
             "[SAM3MedicalIntegrated Init] medical_seg_head: %dch -> %dch "
-            "(nonsemantic Kaiming weight, zero bias)",
+            "(positive nonsemantic mean weight, zero bias)",
             num_classes, num_classes,
         )
 
