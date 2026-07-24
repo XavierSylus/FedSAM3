@@ -53,6 +53,7 @@ def test_text_projection_has_gradient_delta_and_upload_key():
     optimizer = torch.optim.SGD(
         model.fusion_head.text_proj.parameters(), lr=0.1
     )
+    trainer._activate_optimizer_parameter_scope(model, optimizer)
     optimized_ids = {
         id(parameter)
         for group in optimizer.param_groups
@@ -127,6 +128,10 @@ def test_text_client_requires_explicit_text_supervision_contract():
     with pytest.raises(ValueError, match="text_supervision"):
         FederatedConfig(
             clients=clients,
+            aggregation_method="fedavg",
+            routing_mode="unrestricted",
+            sample_weight_unit="private_cases",
+            unoptimized_update_policy="include_zero",
             device="cpu",
             use_mock=True,
         )
@@ -135,6 +140,10 @@ def test_text_client_requires_explicit_text_supervision_contract():
         clients=clients,
         text_loss_name="prototype_logistic",
         text_loss_temperature=0.2,
+        aggregation_method="fedavg",
+        routing_mode="unrestricted",
+        sample_weight_unit="private_cases",
+        unoptimized_update_policy="include_zero",
         device="cpu",
         use_mock=True,
     )

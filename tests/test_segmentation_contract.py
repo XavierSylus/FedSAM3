@@ -111,6 +111,12 @@ segmentation:
     WT: 0.5
     TC: 0.6
     ET: 0.7
+aggregation:
+  method: fedavg
+  sample_weight_unit: private_cases
+  unoptimized_update_policy: include_zero
+federated:
+  routing_mode: unrestricted
 """.strip(),
         encoding="utf-8",
     )
