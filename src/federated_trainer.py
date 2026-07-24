@@ -394,11 +394,7 @@ class FederatedTrainer:
     def _restore_round_global_before_aggregation(
         self, round_global_state: Dict[str, torch.Tensor]
     ) -> None:
-        self.load_trainable_state_dict(
-            self.global_model,
-            round_global_state,
-            device=self.device,
-        )
+        self.server.apply_trainable_parameters(round_global_state)
 
     @staticmethod
     def _stable_json_dumps(payload: Any) -> str:
@@ -589,11 +585,6 @@ class FederatedTrainer:
         try:
             # 导入串行训练辅助函数
             from scripts.setup_serial_clients import setup_serial_clients
-            from scripts.serial_training_utils import get_trainable_state_dict, load_trainable_state_dict
-            
-            # 保存这些函数供后续使用
-            self.get_trainable_state_dict = get_trainable_state_dict
-            self.load_trainable_state_dict = load_trainable_state_dict
             
             # 获取客户端配置（不创建模型）
             self.client_configs = setup_serial_clients(
@@ -666,9 +657,7 @@ class FederatedTrainer:
         print("[5/5] 初始化客户端状态缓存（CPU）...")
         self.client_states = {}
         for client_id in self.client_configs.keys():
-            # 从全局模型提取初始可训练参数，并显式移到 CPU
-            initial_trainable_state = self.get_trainable_state_dict(self.global_model)
-            initial_trainable_state_cpu = {k: v.cpu() for k, v in initial_trainable_state.items()}
+            initial_trainable_state_cpu = self.server.get_trainable_parameter_snapshot()
 
             self.client_states[client_id] = {
                 'weights': initial_trainable_state_cpu,
@@ -1049,7 +1038,8 @@ class FederatedTrainer:
         round_client_stats = {}
         round_client_grad_vectors = {}
         fedprox_mode = str(getattr(self.config, 'baseline_method', 'none')).lower() == 'fedprox'
-        round_global_state = self.get_trainable_state_dict(self.global_model)
+        round_global_state = self.server.get_trainable_parameter_snapshot()
+        round_buffer_snapshot = self.server.capture_round_buffer_snapshot()
         round_global_reference_state = round_global_state if fedprox_mode else None
         if fedprox_mode:
             print(
@@ -1069,11 +1059,11 @@ class FederatedTrainer:
                 cached_client_state=self.client_states[client_id]['weights'],
             )
             print("      [Protocol] Using shared round-global snapshot as client init")
-            self.load_trainable_state_dict(
-                self.global_model,
-                state_to_load,
-                device=self.device
+            self.server.restore_round_buffer_snapshot(
+                round_buffer_snapshot,
+                reason=f"before_client:{client_id}",
             )
+            self.server.apply_trainable_parameters(state_to_load)
             self.global_model.to(self.device)
             
             # Step 2: 动态裁剪优化器（根据模态构建参数列表）
@@ -1303,6 +1293,10 @@ class FederatedTrainer:
             print(f"      [OK] Collected optimizer-scoped upload from {client_id}")
 
             round_client_stats[client_id] = stats
+            self.server.restore_round_buffer_snapshot(
+                round_buffer_snapshot,
+                reason=f"after_client:{client_id}",
+            )
             
             # 清理 GPU 内存
             if torch.cuda.is_available():
@@ -1332,8 +1326,12 @@ class FederatedTrainer:
         )
         self.server._last_grad_conflict_deg = grad_conflict_deg
 
+        self.server.restore_round_buffer_snapshot(
+            round_buffer_snapshot,
+            reason="before_aggregation",
+        )
         self._restore_round_global_before_aggregation(round_global_state)
-        print("  [Protocol] Restored round-global state before server aggregation")
+        print("  [Protocol] Restored round-global parameters and buffers before server aggregation")
 
         aggregated_state = self.server.aggregate_weights(
             round_global_parameters=round_global_state,
@@ -1348,9 +1346,6 @@ class FederatedTrainer:
         aggregation_audit = getattr(self.server, "_last_aggregation_audit", None)
         if not isinstance(aggregation_audit, dict):
             raise RuntimeError("Server did not produce the required aggregation audit")
-        self.training_history['aggregation_audits'].append(
-            {'round': round_num, **aggregation_audit}
-        )
 
         round_group_diagnostics = compute_parameter_group_diagnostics(
             round_global_state=round_global_state,
@@ -1367,8 +1362,19 @@ class FederatedTrainer:
             round_group_diagnostics,
         )
         
-        # 更新全局模型
-        self.global_model.load_state_dict(aggregated_state, strict=False)
+        # Apply only aggregated named parameters, then discard all client-local buffers.
+        self.server.apply_trainable_parameters(aggregated_state)
+        self.server.restore_round_buffer_snapshot(
+            round_buffer_snapshot,
+            reason="after_aggregation",
+        )
+        self.training_history['aggregation_audits'].append(
+            {
+                'round': round_num,
+                **aggregation_audit,
+                'buffer_distribution': self.server.get_round_buffer_distribution_audit(),
+            }
+        )
         
         # 获取更新后的全局表示
         updated_global_reps = self.server.get_global_reps()
