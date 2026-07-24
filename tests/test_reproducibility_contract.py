@@ -240,10 +240,41 @@ def test_run_metadata_contains_seed_determinism_amp_and_environment(tmp_path):
     }
     assert metadata["amp"] == {"enabled": False}
     assert metadata["config_file_sha256"] == config.config_source_sha256
+    assert metadata["determinism"]["mode"] == "strict"
     assert metadata["determinism"]["configured_algorithms"] is True
     assert metadata["determinism"]["configured_warn_only"] is False
+    assert metadata["determinism"]["bitwise_reproducible"] is True
+    assert metadata["determinism"]["known_nondeterministic_operation"] is None
     assert "cudnn_version" in metadata
     assert "gpu_devices" in metadata
+
+
+def test_run_metadata_declares_best_effort_cuda_boundary(tmp_path):
+    config_path = tmp_path / "best_effort.yaml"
+    config_path.write_text(
+        _config_yaml(
+            deterministic_algorithms=True,
+            deterministic_warn_only=True,
+            reproducibility_mode="best_effort_cuda",
+        ),
+        encoding="utf-8",
+    )
+    trainer = object.__new__(FederatedTrainer)
+    trainer.config = FederatedConfig.from_yaml(str(config_path))
+    trainer.device = "cpu"
+    trainer.client_configs = {}
+    trainer.client_sample_counts = {}
+    trainer._set_random_seed()
+
+    metadata = trainer._collect_run_metadata()
+
+    assert metadata["determinism"]["mode"] == "best_effort_cuda"
+    assert metadata["determinism"]["configured_algorithms"] is True
+    assert metadata["determinism"]["configured_warn_only"] is True
+    assert metadata["determinism"]["bitwise_reproducible"] is False
+    assert metadata["determinism"]["known_nondeterministic_operation"] == (
+        "grid_sampler_2d_backward_cuda"
+    )
 
 
 def test_metadata_rejects_a_config_without_raw_yaml_sha256():
