@@ -17,8 +17,8 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  python main.py --config configs/exp_baseline.yaml\n"
-            "  python main.py --config configs/exp_group_a.yaml --rounds 1 --use_mock\n"
+            "  python main.py --config configs/fedsam3_2x2_u_fedavg.yaml\n"
+            "  python main.py --config configs/fedsam3_2x2_r_fedprox.yaml --rounds 1\n"
             "  python main.py --help\n"
         ),
     )
