@@ -733,7 +733,7 @@ class TverskyLoss(nn.Module):
 
 
 class BraTSDiceBCELoss(nn.Module):
-    """Weighted soft-Dice plus per-channel balanced BCE for [WT, TC, ET]."""
+    """Gradient-balanced soft-Dice plus per-channel BCE for [WT, TC, ET]."""
 
     def __init__(
         self,
@@ -793,9 +793,9 @@ class BraTSDiceBCELoss(nn.Module):
         probabilities = torch.sigmoid(logits)
         intersection = (probabilities * target).sum(dim=(2, 3))
         denominator = probabilities.sum(dim=(2, 3)) + target.sum(dim=(2, 3))
-        dice_loss = 1.0 - (
-            (2.0 * intersection + self.smooth) / (denominator + self.smooth)
-        ).mean()
+        numerator = 2.0 * intersection + self.smooth
+        dice_denominator = denominator + self.smooth
+        dice_loss = 1.0 - (numerator / dice_denominator).mean()
         positive_count = target.sum(dim=(0, 2, 3))
         channel_size = target.shape[0] * target.shape[2] * target.shape[3]
         negative_count = channel_size - positive_count
@@ -809,4 +809,22 @@ class BraTSDiceBCELoss(nn.Module):
             target,
             pos_weight=positive_weight,
         )
-        return self.dice_weight * dice_loss + self.bce_weight * bce_loss
+        probability_gradient = probabilities.detach() * (1.0 - probabilities.detach())
+        dice_logit_gradient = -(
+            (2.0 * target * dice_denominator.unsqueeze(-1).unsqueeze(-1))
+            - numerator.unsqueeze(-1).unsqueeze(-1)
+        ) / dice_denominator.square().unsqueeze(-1).unsqueeze(-1)
+        dice_logit_gradient = dice_logit_gradient * probability_gradient / (
+            logits.shape[0] * logits.shape[1]
+        )
+        bce_logit_gradient = (
+            (probabilities.detach() - target)
+            * torch.where(target > 0.0, positive_weight, torch.ones_like(positive_weight))
+            / logits.numel()
+        )
+        dice_gradient_norm = torch.linalg.vector_norm(dice_logit_gradient)
+        bce_gradient_norm = torch.linalg.vector_norm(bce_logit_gradient)
+        bce_scale = dice_gradient_norm / bce_gradient_norm.clamp_min(
+            torch.finfo(logits.dtype).eps
+        )
+        return self.dice_weight * dice_loss + self.bce_weight * bce_scale * bce_loss
