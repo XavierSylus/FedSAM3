@@ -59,8 +59,9 @@ def test_main_matrix_exposes_only_routing_and_fedprox_variables():
         assert config["federated"]["client_init_policy"] == "round_global"
         assert config["federated"]["persist_client_optimizer"] is False
         assert config["system"] == {
+            "reproducibility_mode": "best_effort_cuda",
             "deterministic_algorithms": True,
-            "deterministic_warn_only": False,
+            "deterministic_warn_only": True,
             "num_workers": 0,
             "pin_memory": True,
             "persistent_workers": False,
@@ -92,6 +93,7 @@ def test_manifest_matches_main_matrix_and_has_no_legacy_routing_flag():
 
     assert "use_decoupled_agg" not in manifest_text
     assert "restricted_routing" not in manifest_text
+    assert manifest["manifest_schema_version"] == 3
     assert manifest["matrix_unique_variables"] == [
         "routing_mode",
         "unoptimized_update_policy",
@@ -129,6 +131,25 @@ def test_manifest_matches_main_matrix_and_has_no_legacy_routing_flag():
     assert aggregation["parameter_buffer_boundary"]["upload"] == (
         "optimizer named parameters only"
     )
+    assert manifest["fixed_controls"]["reproducibility"] == {
+        "mode": "best_effort_cuda",
+        "deterministic_algorithms": True,
+        "deterministic_warn_only": True,
+        "bitwise_reproducible": False,
+        "known_nondeterministic_operation": "grid_sampler_2d_backward_cuda",
+        "comparison_rule": "all experiment cells use the same declared seed schedule",
+        "num_workers": 0,
+        "persistent_workers": False,
+        "recorded_state": [
+            "python_numpy_torch_cuda_seeds",
+            "client_round_loader_and_slice_generators",
+            "client_participation_order",
+            "public_proxy_batch_order",
+            "optimizer_and_scheduler_initial_state",
+            "configuration_and_data_manifest_sha256",
+            "git_and_runtime_environment",
+        ],
+    }
 
 
 def test_ratio_configuration_matches_its_manifest_contract():
@@ -152,3 +173,6 @@ def test_ratio_configuration_matches_its_manifest_contract():
     }
     assert ratio["enabled_client_ids"] == ["client_2", "client_3"]
     assert ratio["client_participation_ratio"] == 2.0 / 3.0
+    assert config["system"]["reproducibility_mode"] == "best_effort_cuda"
+    assert config["system"]["deterministic_algorithms"] is True
+    assert config["system"]["deterministic_warn_only"] is True
