@@ -689,6 +689,9 @@ class FederatedTrainer:
                         "total_memory_bytes": int(properties.total_memory),
                     }
                 )
+        reproducibility_mode = str(
+            getattr(self.config, "reproducibility_mode", "strict")
+        )
         metadata: Dict[str, Any] = {
             "seed": int(getattr(self.config, "seed", 3407)),
             "random_seeds": {
@@ -708,11 +711,18 @@ class FederatedTrainer:
                 "enabled": bool(getattr(self.config, "use_amp", False)),
             },
             "determinism": {
+                "mode": reproducibility_mode,
                 "configured_algorithms": bool(
                     getattr(self.config, "deterministic_algorithms", True)
                 ),
                 "configured_warn_only": bool(
                     getattr(self.config, "deterministic_warn_only", False)
+                ),
+                "bitwise_reproducible": reproducibility_mode == "strict",
+                "known_nondeterministic_operation": (
+                    "grid_sampler_2d_backward_cuda"
+                    if reproducibility_mode == "best_effort_cuda"
+                    else None
                 ),
                 "torch_algorithms_enabled": torch.are_deterministic_algorithms_enabled(),
                 "cudnn_deterministic": bool(torch.backends.cudnn.deterministic),
