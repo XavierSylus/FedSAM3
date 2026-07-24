@@ -120,6 +120,7 @@ class FederatedConfig:
 
     deterministic_algorithms: bool = True
     deterministic_warn_only: bool = False
+    reproducibility_mode: str = "strict"
     config_source_path: Optional[str] = None
     config_source_sha256: Optional[str] = None
     
@@ -286,10 +287,26 @@ class FederatedConfig:
             raise ValueError(f"proxy_k_batches 必须大于 0，当前值: {self.proxy_k_batches}")
         if self.seed < 0:
             raise ValueError(f"seed must be >= 0, got {self.seed}")
-        if self.deterministic_algorithms is not True:
-            raise ValueError("deterministic_algorithms must be True for strict experiments")
-        if self.deterministic_warn_only is not False:
-            raise ValueError("deterministic_warn_only must be False for strict experiments")
+        reproducibility_contracts = {
+            "strict": (True, False),
+            "best_effort_cuda": (True, True),
+        }
+        expected_determinism = reproducibility_contracts.get(
+            self.reproducibility_mode
+        )
+        if expected_determinism is None:
+            raise ValueError(
+                "reproducibility_mode must be one of "
+                f"{sorted(reproducibility_contracts)}"
+            )
+        if (
+            self.deterministic_algorithms is not expected_determinism[0]
+            or self.deterministic_warn_only is not expected_determinism[1]
+        ):
+            raise ValueError(
+                "reproducibility_mode does not match deterministic_algorithms "
+                "and deterministic_warn_only"
+            )
         allowed_baselines = {"none", "fedprox"}
         if self.baseline_method not in allowed_baselines:
             raise ValueError(
@@ -679,6 +696,10 @@ class FederatedConfig:
             flattened['deterministic_warn_only'] = system.get(
                 'deterministic_warn_only',
                 False,
+            )
+            flattened['reproducibility_mode'] = system.get(
+                'reproducibility_mode',
+                'strict',
             )
         flattened['config_source_path'] = str(load_path.resolve())
         flattened['config_source_sha256'] = hashlib.sha256(raw_yaml).hexdigest()
