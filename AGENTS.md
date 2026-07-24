@@ -15,4 +15,5 @@
 - 每个修改批次必须记录修改前 Git commit，并在修改完成后将该修改前版本作为独立、不可覆盖的备份引用推送到用户确认的 GitHub remote；修改后版本另行提交，禁止用 force push 覆盖备份，且每次推送都要报告备份引用、修改后 commit 与远端确认结果。
 - 本项目的版本备份与修改后提交统一推送到 GitHub remote `origin`（`XavierSylus/FedSAM3`）；除非用户再次明确变更目标，不得推送到 `segsam3` 或其他 remote。
 - 不得修改 `core_projects/` 内的任何文件；将其视为外部只读依赖。
+- 不得修改、替换或禁用 SAM3 原始编码器及其几何编码逻辑；实验模型必须保持原始 SAM3 编码器行为。
 
