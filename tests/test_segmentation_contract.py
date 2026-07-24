@@ -21,7 +21,7 @@ def _nested_target() -> torch.Tensor:
     )
 
 
-def test_dice_bce_matches_declared_formula_and_preserves_gradients():
+def test_dice_bce_matches_declared_balanced_formula_and_preserves_gradients():
     logits = torch.zeros(1, 3, 2, 2, requires_grad=True)
     target = _nested_target()
     criterion = BraTSDiceBCELoss(
@@ -38,7 +38,16 @@ def test_dice_bce_matches_declared_formula_and_preserves_gradients():
     expected_dice = 1.0 - (
         (2.0 * intersection + 1.0) / (denominator + 1.0)
     ).mean()
-    expected_bce = F.binary_cross_entropy_with_logits(logits, target)
+    positive_count = target.sum(dim=(0, 2, 3))
+    channel_size = target.shape[0] * target.shape[2] * target.shape[3]
+    positive_weight = ((channel_size - positive_count) / positive_count).view(
+        1, 3, 1, 1
+    )
+    expected_bce = F.binary_cross_entropy_with_logits(
+        logits,
+        target,
+        pos_weight=positive_weight,
+    )
     expected = 1.25 * expected_dice + 0.75 * expected_bce
 
     assert torch.allclose(loss, expected)
@@ -46,6 +55,40 @@ def test_dice_bce_matches_declared_formula_and_preserves_gradients():
     assert logits.grad is not None
     assert torch.isfinite(logits.grad).all()
     assert torch.count_nonzero(logits.grad) == logits.numel()
+
+
+def test_sparse_foreground_balances_positive_and_negative_bce_mass():
+    logits = torch.zeros(1, 3, 16, 16, requires_grad=True)
+    target = torch.zeros_like(logits, dtype=torch.float32)
+    target[:, 0, 4:12, 4:12] = 1.0
+    target[:, 1, 6:10, 6:10] = 1.0
+    target[:, 2, 7:9, 7:9] = 1.0
+    criterion = BraTSDiceBCELoss(
+        dice_weight=1.0,
+        bce_weight=1.0,
+        smooth=1.0,
+    )
+
+    loss = criterion(logits, target)
+    probabilities = torch.sigmoid(logits)
+    intersection = (probabilities * target).sum(dim=(2, 3))
+    denominator = probabilities.sum(dim=(2, 3)) + target.sum(dim=(2, 3))
+    dice_loss = 1.0 - (
+        (2.0 * intersection + 1.0) / (denominator + 1.0)
+    ).mean()
+    balanced_bce = loss - dice_loss
+    gradients = torch.autograd.grad(balanced_bce, logits)[0]
+
+    for channel in range(3):
+        foreground_grad = gradients[:, channel][target[:, channel].bool()]
+        background_grad = gradients[:, channel][~target[:, channel].bool()]
+        assert torch.all(foreground_grad < 0.0)
+        assert torch.all(background_grad > 0.0)
+        assert torch.allclose(
+            foreground_grad.sum().abs(),
+            background_grad.sum(),
+            rtol=0.15,
+        )
 
 
 def test_empty_target_channels_are_not_skipped():
