@@ -35,9 +35,9 @@ def test_dice_bce_matches_gradient_balanced_formula_and_preserves_gradients():
     probabilities = torch.sigmoid(logits)
     intersection = (probabilities * target).sum(dim=(2, 3))
     denominator = probabilities.sum(dim=(2, 3)) + target.sum(dim=(2, 3))
-    expected_dice = 1.0 - (
+    expected_dice_by_channel = 1.0 - (
         (2.0 * intersection + 1.0) / (denominator + 1.0)
-    ).mean()
+    ).mean(dim=0)
     positive_count = target.sum(dim=(0, 2, 3))
     channel_size = target.shape[0] * target.shape[2] * target.shape[3]
     positive_weight = ((channel_size - positive_count) / positive_count).view(
@@ -47,13 +47,20 @@ def test_dice_bce_matches_gradient_balanced_formula_and_preserves_gradients():
         logits,
         target,
         pos_weight=positive_weight,
-    )
-    dice_gradient = torch.autograd.grad(expected_dice, logits, retain_graph=True)[0]
-    bce_gradient = torch.autograd.grad(expected_bce, logits, retain_graph=True)[0]
-    bce_scale = torch.linalg.vector_norm(dice_gradient) / torch.linalg.vector_norm(
-        bce_gradient
-    )
-    expected = 1.25 * expected_dice + 0.75 * bce_scale * expected_bce
+        reduction="none",
+    ).mean(dim=(0, 2, 3))
+    dice_gradient = torch.autograd.grad(
+        expected_dice_by_channel.mean(), logits, retain_graph=True
+    )[0]
+    bce_gradient = torch.autograd.grad(
+        expected_bce.mean(), logits, retain_graph=True
+    )[0]
+    bce_scale = torch.linalg.vector_norm(
+        dice_gradient, dim=(0, 2, 3)
+    ) / torch.linalg.vector_norm(bce_gradient, dim=(0, 2, 3))
+    expected = 1.25 * expected_dice_by_channel.mean() + 0.75 * (
+        bce_scale.detach() * expected_bce
+    ).mean()
 
     assert torch.allclose(loss, expected)
     loss.backward()
@@ -78,10 +85,10 @@ def test_sparse_foreground_balances_positive_and_negative_bce_mass():
     probabilities = torch.sigmoid(logits)
     intersection = (probabilities * target).sum(dim=(2, 3))
     denominator = probabilities.sum(dim=(2, 3)) + target.sum(dim=(2, 3))
-    dice_loss = 1.0 - (
+    dice_loss_by_channel = 1.0 - (
         (2.0 * intersection + 1.0) / (denominator + 1.0)
-    ).mean()
-    balanced_bce = loss - dice_loss
+    ).mean(dim=0)
+    balanced_bce = loss - dice_loss_by_channel.mean()
     gradients = torch.autograd.grad(balanced_bce, logits)[0]
 
     for channel in range(3):
@@ -112,29 +119,84 @@ def test_sparse_foreground_balances_dice_and_bce_logit_gradient_scales():
     probabilities = torch.sigmoid(logits)
     intersection = (probabilities * target).sum(dim=(2, 3))
     denominator = probabilities.sum(dim=(2, 3)) + target.sum(dim=(2, 3))
-    dice_loss = 1.0 - (
+    dice_loss_by_channel = 1.0 - (
         (2.0 * intersection + 1.0) / (denominator + 1.0)
-    ).mean()
+    ).mean(dim=0)
     positive_count = target.sum(dim=(0, 2, 3))
     channel_size = target.shape[0] * target.shape[2] * target.shape[3]
     positive_weight = ((channel_size - positive_count) / positive_count).view(
         1, 3, 1, 1
     )
-    bce_loss = F.binary_cross_entropy_with_logits(
+    bce_loss_by_channel = F.binary_cross_entropy_with_logits(
         logits,
         target,
         pos_weight=positive_weight,
+        reduction="none",
+    ).mean(dim=(0, 2, 3))
+    dice_gradient = torch.autograd.grad(
+        dice_loss_by_channel.mean(), logits, retain_graph=True
+    )[0]
+    bce_gradient = torch.autograd.grad(
+        bce_loss_by_channel.mean(), logits, retain_graph=True
+    )[0]
+    bce_scale = torch.linalg.vector_norm(
+        dice_gradient, dim=(0, 2, 3)
+    ) / torch.linalg.vector_norm(bce_gradient, dim=(0, 2, 3))
+
+    assert torch.allclose(
+        loss, dice_loss_by_channel.mean() + (bce_scale * bce_loss_by_channel).mean()
     )
-    dice_gradient = torch.autograd.grad(dice_loss, logits, retain_graph=True)[0]
-    bce_gradient = torch.autograd.grad(bce_loss, logits, retain_graph=True)[0]
-    bce_scale = torch.linalg.vector_norm(dice_gradient) / torch.linalg.vector_norm(
-        bce_gradient
+    assert torch.allclose(
+        torch.linalg.vector_norm(dice_gradient, dim=(0, 2, 3)),
+        torch.linalg.vector_norm(
+            bce_gradient * bce_scale.view(1, 3, 1, 1), dim=(0, 2, 3)
+        ),
     )
 
-    assert torch.allclose(loss, dice_loss + bce_scale * bce_loss)
+
+def test_imbalanced_channels_use_distinct_bce_gradient_scales():
+    logits = torch.zeros(1, 3, 16, 16, requires_grad=True)
+    target = torch.zeros_like(logits, dtype=torch.float32)
+    target[:, 0, 4:12, 4:12] = 1.0
+    target[:, 1, 6:10, 6:10] = 1.0
+    target[:, 2, 7:9, 7:9] = 1.0
+    criterion = BraTSDiceBCELoss(
+        dice_weight=1.0,
+        bce_weight=1.0,
+        smooth=1.0,
+    )
+
+    probabilities = torch.sigmoid(logits)
+    intersection = (probabilities * target).sum(dim=(2, 3))
+    denominator = probabilities.sum(dim=(2, 3)) + target.sum(dim=(2, 3))
+    dice_by_channel = 1.0 - (
+        (2.0 * intersection + 1.0) / (denominator + 1.0)
+    ).mean(dim=0)
+    positive_count = target.sum(dim=(0, 2, 3))
+    channel_size = target.shape[0] * target.shape[2] * target.shape[3]
+    positive_weight = ((channel_size - positive_count) / positive_count).view(
+        1, 3, 1, 1
+    )
+    bce_by_channel = F.binary_cross_entropy_with_logits(
+        logits,
+        target,
+        pos_weight=positive_weight,
+        reduction="none",
+    ).mean(dim=(0, 2, 3))
+    dice_gradient = torch.autograd.grad(
+        dice_by_channel.mean(), logits, retain_graph=True
+    )[0]
+    bce_gradient = torch.autograd.grad(
+        bce_by_channel.mean(), logits, retain_graph=True
+    )[0]
+    bce_scale = torch.linalg.vector_norm(
+        dice_gradient, dim=(0, 2, 3)
+    ) / torch.linalg.vector_norm(bce_gradient, dim=(0, 2, 3))
+
+    assert torch.unique(bce_scale).numel() == 3
     assert torch.allclose(
-        torch.linalg.vector_norm(dice_gradient),
-        torch.linalg.vector_norm(bce_scale * bce_gradient),
+        criterion(logits, target),
+        dice_by_channel.mean() + (bce_scale.detach() * bce_by_channel).mean(),
     )
 
 
@@ -153,9 +215,9 @@ def test_gradient_balance_scale_is_constant_during_backpropagation():
     probabilities = torch.sigmoid(logits)
     intersection = (probabilities * target).sum(dim=(2, 3))
     denominator = probabilities.sum(dim=(2, 3)) + target.sum(dim=(2, 3))
-    dice_loss = 1.0 - (
+    dice_loss_by_channel = 1.0 - (
         (2.0 * intersection + 1.0) / (denominator + 1.0)
-    ).mean()
+    ).mean(dim=0)
     positive_count = target.sum(dim=(0, 2, 3))
     channel_size = target.shape[0] * target.shape[2] * target.shape[3]
     positive_weight = ((channel_size - positive_count) / positive_count).view(
@@ -165,16 +227,18 @@ def test_gradient_balance_scale_is_constant_during_backpropagation():
         logits,
         target,
         pos_weight=positive_weight,
-    )
-    dice_gradient = torch.autograd.grad(dice_loss, logits, retain_graph=True)[0]
-    bce_gradient = torch.autograd.grad(bce_loss, logits, retain_graph=True)[0]
-    bce_scale = (
-        torch.linalg.vector_norm(dice_gradient)
-        / torch.linalg.vector_norm(bce_gradient)
-    ).detach()
+        reduction="none",
+    ).mean(dim=(0, 2, 3))
+    dice_gradient = torch.autograd.grad(
+        dice_loss_by_channel.mean(), logits, retain_graph=True
+    )[0]
+    bce_gradient = torch.autograd.grad(bce_loss.mean(), logits, retain_graph=True)[0]
+    bce_scale = torch.linalg.vector_norm(
+        dice_gradient, dim=(0, 2, 3)
+    ) / torch.linalg.vector_norm(bce_gradient, dim=(0, 2, 3))
 
     actual_gradient = torch.autograd.grad(criterion(logits, target), logits)[0]
-    expected_gradient = dice_gradient + bce_scale * bce_gradient
+    expected_gradient = dice_gradient + bce_scale.detach().view(1, 3, 1, 1) * bce_gradient
 
     assert torch.allclose(actual_gradient, expected_gradient, rtol=1e-5, atol=1e-7)
 
