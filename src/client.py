@@ -32,6 +32,13 @@ from src.cream_losses import (
     CreamContrastiveLoss,
     PrototypeLogisticTextLoss,
 )
+from src.parameter_groups import (
+    IMAGE_PARAMS,
+    PARAMETER_GROUPS,
+    TEXT_PARAMS,
+    VISION_ADAPTER,
+    classify_trainable_parameters,
+)
 
 
 # ============================================================================
@@ -168,6 +175,10 @@ class BaseClientTrainer(ABC):
         self._adapter_grad_steps = 0
         self._last_adapter_grad_vector: Optional[torch.Tensor] = None
         self._trainable_param_name_by_id: Dict[int, str] = {}
+        self.client_modality: Optional[str] = None
+        self._parameter_group_by_name: Dict[str, str] = {}
+        self._parameter_group_grad_seen_names: Dict[str, set[str]] = {}
+        self._parameter_group_nonzero_grad_names: Dict[str, set[str]] = {}
         self._diag_grad: Dict[str, float] = {}
         self._diag_cream: Dict[str, float] = {}
         self._last_multimodal_cream_diag: Optional[Dict[str, float]] = None
@@ -206,6 +217,175 @@ class BaseClientTrainer(ABC):
         self._adapter_grad_sum = None
         self._adapter_grad_steps = 0
         self._last_adapter_grad_vector = None
+
+    def _initialize_parameter_group_effectiveness(self, model: nn.Module) -> None:
+        if self.client_modality not in {"text_only", "image_only", "multimodal"}:
+            raise RuntimeError("Client modality must be set before local training")
+        self._parameter_group_by_name = classify_trainable_parameters(
+            name for name, parameter in model.named_parameters() if parameter.requires_grad
+        )
+        self._parameter_group_grad_seen_names = {
+            parameter_group: set() for parameter_group in PARAMETER_GROUPS
+        }
+        self._parameter_group_nonzero_grad_names = {
+            parameter_group: set() for parameter_group in PARAMETER_GROUPS
+        }
+
+    def _record_parameter_group_gradients(
+        self,
+        optimizer: torch.optim.Optimizer,
+    ) -> None:
+        optimizer_names = self.get_active_optimizer_parameter_names()
+        for optimizer_group in optimizer.param_groups:
+            for parameter in optimizer_group["params"]:
+                parameter_name = self._trainable_param_name_by_id.get(id(parameter))
+                if parameter_name is None:
+                    raise RuntimeError("Optimizer parameter is not a trainable model parameter")
+                if parameter_name not in optimizer_names:
+                    raise RuntimeError(
+                        f"Optimizer parameter is outside its active scope: {parameter_name}"
+                    )
+                if parameter.grad is None:
+                    continue
+                parameter_group = self._parameter_group_by_name.get(parameter_name)
+                if parameter_group is None:
+                    raise RuntimeError(
+                        f"Unclassified optimizer parameter: {parameter_name}"
+                    )
+                self._parameter_group_grad_seen_names[parameter_group].add(parameter_name)
+                gradient = parameter.grad.detach()
+                if torch.isfinite(gradient).all() and torch.count_nonzero(gradient).item() > 0:
+                    self._parameter_group_nonzero_grad_names[parameter_group].add(
+                        parameter_name
+                    )
+
+    def _expected_optimizer_parameter_groups(self) -> frozenset[str]:
+        if self.client_modality == "text_only":
+            return frozenset({TEXT_PARAMS})
+        if self.client_modality == "image_only":
+            return frozenset({VISION_ADAPTER, IMAGE_PARAMS})
+        if self.client_modality == "multimodal":
+            return frozenset(PARAMETER_GROUPS)
+        raise RuntimeError("Client modality must be set before local training")
+
+    def collect_parameter_group_effectiveness(
+        self,
+        model: nn.Module,
+        round_global_state: Dict[str, torch.Tensor],
+        uploaded_state: Dict[str, torch.Tensor],
+    ) -> Dict[str, Any]:
+        if not self._parameter_group_by_name:
+            raise RuntimeError("Parameter group effectiveness was not initialized")
+
+        optimizer_names = self.get_active_optimizer_parameter_names()
+        uploaded_names = set(uploaded_state)
+        named_parameters = {
+            name: parameter
+            for name, parameter in model.named_parameters()
+            if parameter.requires_grad
+        }
+        if set(named_parameters) != set(self._parameter_group_by_name):
+            raise RuntimeError("Trainable model parameter registry changed during local training")
+
+        for parameter_name in sorted(optimizer_names):
+            model_parameter = named_parameters.get(parameter_name)
+            round_global_parameter = round_global_state.get(parameter_name)
+            if model_parameter is None or round_global_parameter is None:
+                raise RuntimeError(
+                    f"Optimizer parameter is missing from the round-global snapshot: {parameter_name}"
+                )
+            local_delta = model_parameter.detach().cpu() - round_global_parameter.detach().cpu()
+            if not torch.isfinite(local_delta).all():
+                raise RuntimeError(f"Non-finite optimizer delta: {parameter_name}")
+            if torch.count_nonzero(local_delta).item() > 0 and parameter_name not in uploaded_names:
+                raise RuntimeError(
+                    f"Nonzero optimizer delta is missing from upload: {parameter_name}"
+                )
+
+        if uploaded_names != set(optimizer_names):
+            raise RuntimeError(
+                "Upload keys do not equal the active optimizer parameter keys: "
+                f"upload_only={sorted(uploaded_names - set(optimizer_names))}, "
+                f"optimizer_only={sorted(set(optimizer_names) - uploaded_names)}"
+            )
+
+        names_by_group = {parameter_group: set() for parameter_group in PARAMETER_GROUPS}
+        optimizer_names_by_group = {
+            parameter_group: set() for parameter_group in PARAMETER_GROUPS
+        }
+        upload_names_by_group = {
+            parameter_group: set() for parameter_group in PARAMETER_GROUPS
+        }
+        nonzero_delta_names_by_group = {
+            parameter_group: set() for parameter_group in PARAMETER_GROUPS
+        }
+        for parameter_name, parameter_group in self._parameter_group_by_name.items():
+            names_by_group[parameter_group].add(parameter_name)
+        for parameter_name in optimizer_names:
+            optimizer_names_by_group[self._parameter_group_by_name[parameter_name]].add(
+                parameter_name
+            )
+            local_delta = (
+                named_parameters[parameter_name].detach().cpu()
+                - round_global_state[parameter_name].detach().cpu()
+            )
+            if torch.count_nonzero(local_delta).item() > 0:
+                nonzero_delta_names_by_group[
+                    self._parameter_group_by_name[parameter_name]
+                ].add(parameter_name)
+        for parameter_name in uploaded_names:
+            parameter_group = self._parameter_group_by_name.get(parameter_name)
+            if parameter_group is None:
+                raise RuntimeError(f"Uploaded parameter is unclassified: {parameter_name}")
+            upload_names_by_group[parameter_group].add(parameter_name)
+
+        expected_groups = self._expected_optimizer_parameter_groups()
+        groups: Dict[str, Dict[str, Any]] = {}
+        for parameter_group in sorted(PARAMETER_GROUPS):
+            model_names = names_by_group[parameter_group]
+            optimizer_group_names = optimizer_names_by_group[parameter_group]
+            grad_seen_names = self._parameter_group_grad_seen_names[parameter_group]
+            nonzero_grad_names = self._parameter_group_nonzero_grad_names[parameter_group]
+            nonzero_delta_names = nonzero_delta_names_by_group[parameter_group]
+            upload_group_names = upload_names_by_group[parameter_group]
+            present_in_model = bool(model_names)
+            expected_optimizer_group = (
+                present_in_model and parameter_group in expected_groups
+            )
+            if expected_optimizer_group and not optimizer_group_names:
+                raise RuntimeError(
+                    f"Expected optimizer parameter group is empty: {parameter_group}"
+                )
+            if expected_optimizer_group and not grad_seen_names:
+                raise RuntimeError(
+                    f"Expected optimizer parameter group has all gradients None: {parameter_group}"
+                )
+            if expected_optimizer_group and not nonzero_grad_names:
+                raise RuntimeError(
+                    f"Expected optimizer parameter group has no finite nonzero gradient: "
+                    f"{parameter_group}"
+                )
+            groups[parameter_group] = {
+                "status": "present" if present_in_model else "not_present",
+                "present_in_model": present_in_model,
+                "expected_optimizer_group": expected_optimizer_group,
+                "model_parameter_count": len(model_names),
+                "optimizer_parameter_count": len(optimizer_group_names),
+                "forward_grad_seen_count": len(grad_seen_names),
+                "nonzero_grad_count": len(nonzero_grad_names),
+                "nonzero_delta_count": len(nonzero_delta_names),
+                "upload_count": len(upload_group_names),
+                "aggregation_eligible_count": 0,
+                "aggregated_count": 0,
+                "forward_grad_seen": bool(grad_seen_names),
+                "in_optimizer": bool(optimizer_group_names),
+                "nonzero_gradient": bool(nonzero_grad_names),
+                "nonzero_delta": bool(nonzero_delta_names),
+                "uploaded": bool(upload_group_names),
+                "aggregation_eligible": False,
+                "aggregated": False,
+            }
+        return {"modality": self.client_modality, "groups": groups}
 
     def _record_adapter_grad_snapshot(self, optimizer: torch.optim.Optimizer) -> None:
         """Accumulate a flattened adapter-gradient snapshot after unscaling."""
@@ -562,6 +742,7 @@ class BaseClientTrainer(ABC):
         self.local_epoch = 0
         self._activate_optimizer_parameter_scope(model, optimizer)
         self._reset_adapter_grad_tracking(model)
+        self._initialize_parameter_group_effectiveness(model)
 
         # 本地 Epoch 循环
         for epoch in range(self.local_epochs):
@@ -814,6 +995,7 @@ class BaseClientTrainer(ABC):
             self.scaler.unscale_(optimizer)
             self._record_grad_norm_diagnostics(optimizer)
             self._record_adapter_grad_snapshot(optimizer)
+            self._record_parameter_group_gradients(optimizer)
             _params_to_clip = [
                 p for group in optimizer.param_groups
                 for p in group['params']
@@ -830,6 +1012,7 @@ class BaseClientTrainer(ABC):
                 return
             self._record_grad_norm_diagnostics(optimizer)
             self._record_adapter_grad_snapshot(optimizer)
+            self._record_parameter_group_gradients(optimizer)
             _params_to_clip = [
                 p for group in optimizer.param_groups
                 for p in group['params']
@@ -856,6 +1039,7 @@ class BaseClientTrainer(ABC):
             self.scaler.unscale_(optimizer)
             self._record_grad_norm_diagnostics(optimizer)
             self._record_adapter_grad_snapshot(optimizer)
+            self._record_parameter_group_gradients(optimizer)
             _params_to_clip = [
                 p for group in optimizer.param_groups
                 for p in group['params']
@@ -874,6 +1058,7 @@ class BaseClientTrainer(ABC):
             if _params_to_clip:
                 self._record_grad_norm_diagnostics(optimizer)
                 self._record_adapter_grad_snapshot(optimizer)
+                self._record_parameter_group_gradients(optimizer)
                 torch.nn.utils.clip_grad_norm_(_params_to_clip, max_norm=self.grad_clip)
             optimizer.step()
         optimizer.zero_grad(set_to_none=True)
