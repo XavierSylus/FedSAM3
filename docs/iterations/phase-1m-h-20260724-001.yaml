@@ -1,0 +1,19 @@
+phase: 1M-H
+base_commit: ace29bb41b39f2e6e83ef8e795a0401ad597d139
+backup_tag: backup/pre-phase-1m-h-20260724-001
+scope:
+  implementation_files:
+    - configs/proposed_method.yaml
+    - main.py
+  audit_record: docs/iterations/phase-1m-h-20260724-001.yaml
+actions:
+  - remove the final legacy proposed-method configuration
+  - point the public training entrypoint help at the strict U/R experiment matrix
+verification:
+  - static Python parse
+  - static legacy-config and old-example scan
+  - diff check
+runtime_validation: deferred_to_server
+implementation_commit: d79dbf57158ffdef8b503a5854bbc70a6bed3e8e
+origin_main_confirmed: d79dbf57158ffdef8b503a5854bbc70a6bed3e8e
+status: COMPLETE
