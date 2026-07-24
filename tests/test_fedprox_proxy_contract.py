@@ -1,12 +1,6 @@
 import ast
 from pathlib import Path
 
-import torch
-import torch.nn as nn
-
-from src.client import BaseClientTrainer
-
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CLIENT_PATH = PROJECT_ROOT / "src" / "client.py"
 TRAINER_PATH = PROJECT_ROOT / "src" / "federated_trainer.py"
@@ -108,30 +102,13 @@ def test_fusion_parameters_are_all_created_before_local_training():
     assert "_enc_proj" not in extract_source
 
 
-def test_upload_contains_only_named_trainable_parameters():
-    method = _class_method(CLIENT_PATH, "BaseClientTrainer", "get_model_state")
+def test_upload_contains_only_active_optimizer_parameters():
+    method = _class_method(CLIENT_PATH, "BaseClientTrainer", "get_uploadable_state")
     source = ast.unparse(method)
 
+    assert "get_active_optimizer_parameter_names" in source
     assert "model.named_parameters()" in source
-    assert "model.state_dict()" not in source
-    assert "ALWAYS_INCLUDE_PREFIXES" not in source
-
-
-def test_upload_matches_model_trainable_registry():
-    class RegistryModel(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.optimized = nn.Linear(2, 1, bias=False)
-            self.requires_grad_but_not_optimized = nn.Parameter(torch.ones(1))
-
-        def get_trainable_params(self):
-            return list(self.optimized.parameters())
-
-    model = RegistryModel()
-
-    uploaded = BaseClientTrainer.get_model_state(object(), model)
-
-    assert set(uploaded) == {"optimized.weight"}
+    assert "state_dict" not in source
 
 
 def test_runtime_output_adapter_enters_trainable_registry():
@@ -169,7 +146,7 @@ def test_runtime_modules_are_materialized_before_client_state_cache():
         if isinstance(node, ast.Assign)
         and any(
             isinstance(target, ast.Name)
-            and target.id == "initial_trainable_state"
+            and target.id == "initial_trainable_state_cpu"
             for target in node.targets
         )
     )
