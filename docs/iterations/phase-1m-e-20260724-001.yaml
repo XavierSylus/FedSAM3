@@ -1,0 +1,20 @@
+phase: 1M-E
+base_commit: 45f75e431ce426fb138e2f5a9b7b27e7dbe16c51
+backup_tag: backup/pre-phase-1m-e-20260724-001
+scope:
+  implementation_files:
+    - src/server.py
+    - src/server_manager.py
+  audit_record: docs/iterations/phase-1m-e-20260724-001.yaml
+actions:
+  - remove the retired full-state, similarity-weighted, and heterogeneous aggregation APIs
+  - retain only named-parameter U/R FedAvg aggregation as the server aggregation entry
+  - remove the server manager that invokes retired aggregation and distillation paths
+verification:
+  - static Python parse
+  - static strict aggregation signature and retired-symbol scan
+  - diff check
+runtime_validation: deferred_to_server
+implementation_commit: f60c75c51aa7112df32bff6ba3c77a1914ab29e2
+origin_main_confirmed: f60c75c51aa7112df32bff6ba3c77a1914ab29e2
+status: COMPLETE
