@@ -1,0 +1,21 @@
+phase: 1P-A
+base_commit: 3f00556be315008c389752cbb38bdaa4312c7d3a
+backup_tag: backup/pre-phase-1p-a-20260724-001
+scope:
+  implementation_files:
+    - src/config_manager.py
+    - tests/test_reproducibility_contract.py
+    - configs/fedsam3_2x2_u_fedavg.yaml
+  audit_record: docs/iterations/phase-1p-a-20260724-001.yaml
+actions:
+  - define strict and best_effort_cuda reproducibility contracts
+  - require the deterministic API flags to match the selected contract
+  - configure U-FedAvg to retain deterministic preferences while warning for unsupported CUDA backward operations
+verification:
+  - Python AST and compile checks
+  - YAML contract check
+  - diff check excluding core_projects
+runtime_validation: deferred_to_server
+implementation_commit: 49fbb1c447e1b2a291ae0e29ae79abe08b224e76
+origin_main_confirmed: 49fbb1c447e1b2a291ae0e29ae79abe08b224e76
+status: COMPLETE
