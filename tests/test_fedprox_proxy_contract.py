@@ -231,6 +231,22 @@ def test_server_preflight_reads_the_top_level_seed_contract():
     }
 
 
+def test_server_preflight_validates_and_reports_reproducibility_contract():
+    main_function = next(
+        node
+        for node in ast.parse(PREFLIGHT_PATH.read_text(encoding="utf-8")).body
+        if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+    main_source = ast.unparse(main_function)
+
+    assert "REPRODUCIBILITY_CONTRACTS" in main_source
+    assert "reproducibility_mode" in main_source
+    assert "deterministic_algorithms" in main_source
+    assert "deterministic_warn_only" in main_source
+    assert "bitwise_reproducible" in main_source
+    assert "grid_sampler_2d_backward_cuda" in main_source
+
+
 def test_launcher_removes_invalid_openmp_thread_value():
     source = LAUNCHER_PATH.read_text(encoding="utf-8")
 

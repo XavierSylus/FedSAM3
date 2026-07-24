@@ -16,6 +16,12 @@ import torch
 from data_processing.brats_region_contract import REGION_NAMES
 
 
+REPRODUCIBILITY_CONTRACTS = {
+    "strict": (True, False),
+    "best_effort_cuda": (True, True),
+}
+
+
 @dataclass
 class FederatedConfig:
     """
@@ -287,17 +293,15 @@ class FederatedConfig:
             raise ValueError(f"proxy_k_batches 必须大于 0，当前值: {self.proxy_k_batches}")
         if self.seed < 0:
             raise ValueError(f"seed must be >= 0, got {self.seed}")
-        reproducibility_contracts = {
-            "strict": (True, False),
-            "best_effort_cuda": (True, True),
-        }
-        expected_determinism = reproducibility_contracts.get(
-            self.reproducibility_mode
+        expected_determinism = (
+            REPRODUCIBILITY_CONTRACTS.get(self.reproducibility_mode)
+            if isinstance(self.reproducibility_mode, str)
+            else None
         )
         if expected_determinism is None:
             raise ValueError(
                 "reproducibility_mode must be one of "
-                f"{sorted(reproducibility_contracts)}"
+                f"{sorted(REPRODUCIBILITY_CONTRACTS)}"
             )
         if (
             self.deterministic_algorithms is not expected_determinism[0]
