@@ -12,7 +12,11 @@ from src.config_manager import FederatedConfig
 from src.federated_trainer import FederatedTrainer
 
 
-def _config_yaml(deterministic_algorithms=True, deterministic_warn_only=False):
+def _config_yaml(
+    deterministic_algorithms=True,
+    deterministic_warn_only=False,
+    reproducibility_mode="strict",
+):
     return "\n".join(
         [
             "aggregation:",
@@ -27,6 +31,7 @@ def _config_yaml(deterministic_algorithms=True, deterministic_warn_only=False):
             "  use_amp: false",
             "system:",
             "  seed: 3407",
+            f"  reproducibility_mode: {reproducibility_mode}",
             f"  deterministic_algorithms: {str(deterministic_algorithms).lower()}",
             f"  deterministic_warn_only: {str(deterministic_warn_only).lower()}",
             "logging:",
@@ -61,6 +66,25 @@ def test_yaml_config_records_raw_sha256_and_deterministic_settings(tmp_path):
     assert config.config_source_sha256 == hashlib.sha256(raw_yaml).hexdigest()
     assert config.deterministic_algorithms is True
     assert config.deterministic_warn_only is False
+    assert config.reproducibility_mode == "strict"
+
+
+def test_best_effort_cuda_config_requires_warn_only(tmp_path):
+    config_path = tmp_path / "best_effort.yaml"
+    config_path.write_text(
+        _config_yaml(
+            deterministic_algorithms=True,
+            deterministic_warn_only=True,
+            reproducibility_mode="best_effort_cuda",
+        ),
+        encoding="utf-8",
+    )
+
+    config = FederatedConfig.from_yaml(str(config_path))
+
+    assert config.reproducibility_mode == "best_effort_cuda"
+    assert config.deterministic_algorithms is True
+    assert config.deterministic_warn_only is True
 
 
 def test_config_source_provenance_does_not_change_run_identity(tmp_path):
@@ -163,21 +187,35 @@ def test_data_manifest_and_stream_seeds_are_recorded(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("deterministic_algorithms", "deterministic_warn_only"),
-    [(False, False), (True, True)],
+    (
+        "deterministic_algorithms",
+        "deterministic_warn_only",
+        "reproducibility_mode",
+    ),
+    [
+        (False, False, "strict"),
+        (True, True, "strict"),
+        (True, False, "best_effort_cuda"),
+        (True, False, "unknown"),
+    ],
 )
-def test_non_strict_determinism_settings_are_rejected(
+def test_invalid_reproducibility_contract_is_rejected(
     tmp_path,
     deterministic_algorithms,
     deterministic_warn_only,
+    reproducibility_mode,
 ):
     config_path = tmp_path / "invalid.yaml"
     config_path.write_text(
-        _config_yaml(deterministic_algorithms, deterministic_warn_only),
+        _config_yaml(
+            deterministic_algorithms,
+            deterministic_warn_only,
+            reproducibility_mode,
+        ),
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="deterministic"):
+    with pytest.raises(ValueError, match="reproducibility"):
         FederatedConfig.from_yaml(str(config_path))
 
 
