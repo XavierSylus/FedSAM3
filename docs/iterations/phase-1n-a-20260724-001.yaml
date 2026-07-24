@@ -1,0 +1,21 @@
+phase: 1N-A
+base_commit: aa1f2d53fcfcf56f37f0434c928cd4858f006b5b
+backup_tag: backup/pre-phase-1n-a-20260724-001
+scope:
+  implementation_files:
+    - tests/test_segmentation_contract.py
+    - tests/test_text_loss_contract.py
+    - tests/test_reproducibility_contract.py
+  audit_record: docs/iterations/phase-1n-a-20260724-001.yaml
+actions:
+  - align segmentation test YAML with the strict aggregation and routing contract
+  - activate the explicit optimizer parameter scope before testing text upload
+  - initialize sample-count state in the manual reproducibility trainer fixtures
+verification:
+  - static Python parse
+  - static strict-contract assertions
+  - diff check
+runtime_validation: deferred_to_server
+implementation_commit: ca5c8f76117f0a46d303b1dc4e509b19f7aede9e
+origin_main_confirmed: ca5c8f76117f0a46d303b1dc4e509b19f7aede9e
+status: COMPLETE
