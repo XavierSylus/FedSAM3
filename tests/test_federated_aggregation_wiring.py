@@ -29,6 +29,21 @@ def _method_source(name):
     return "\n".join(lines[method.lineno - 1:method.end_lineno])
 
 
+def _raise_message_literals(name):
+    messages = []
+    for node in ast.walk(_method(name)):
+        if not isinstance(node, ast.Raise) or not isinstance(node.exc, ast.Call):
+            continue
+        messages.append(
+            "".join(
+                child.value
+                for child in ast.walk(node.exc)
+                if isinstance(child, ast.Constant) and isinstance(child.value, str)
+            )
+        )
+    return messages
+
+
 def test_trainer_calls_strict_parameterwise_aggregation_api():
     aggregation_calls = [
         node
@@ -67,18 +82,43 @@ def test_trainer_uses_private_dataset_length_as_the_only_sample_weight():
     ]
 
     assert len(dataset_length_calls) == 1
-    assert "private_case_count must be a positive integer" in derive_counts_source
+    assert any(
+        isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "private_case_counts"
+            for target in node.targets
+        )
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "private_case_count"
+        for node in ast.walk(derive_counts_tree)
+    )
+    assert any(
+        isinstance(node, ast.Compare)
+        and isinstance(node.left, ast.Name)
+        and node.left.id == "private_case_count"
+        and any(isinstance(operator, ast.LtE) for operator in node.ops)
+        for node in ast.walk(derive_counts_tree)
+    )
     assert "batch_size" not in derive_counts_source
     assert "local_epochs" not in derive_counts_source
 
 
 def test_trainer_rejects_invalid_optimizer_uploads_without_state_dict_fallback():
     round_source = _method_source("_train_single_round")
+    error_messages = _raise_message_literals("_train_single_round")
 
     assert "if updated_weights is None" in round_source
     assert "upload keys do not equal its optimizer" in round_source
-    assert "uploaded parameter absent from the round-global snapshot" in round_source
-    assert "produced a non-finite parameter delta" in round_source
+    assert any(
+        "uploaded parameter absent from the round-global snapshot" in message
+        for message in error_messages
+    )
+    assert any(
+        "produced a non-finite parameter delta" in message
+        for message in error_messages
+    )
     assert "falling back to global model" not in round_source
     assert "round_client_reps" not in round_source
 
