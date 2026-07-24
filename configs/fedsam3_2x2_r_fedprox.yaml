@@ -89,6 +89,8 @@ validation:
   save_masks: true
   max_masks: 50
 system:
-  num_workers: 4
+  deterministic_algorithms: true
+  deterministic_warn_only: false
+  num_workers: 0
   pin_memory: true
-  persistent_workers: true
+  persistent_workers: false

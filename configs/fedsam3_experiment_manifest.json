@@ -1,94 +1,230 @@
 {
-  "protocol": "strict routing x FedProx comparison",
+  "manifest_schema_version": 2,
+  "protocol": "strict parameterwise routing x FedProx comparison",
   "seed": 3407,
+  "client_structure": [
+    {
+      "client_id": "client_1",
+      "modality": "text_only"
+    },
+    {
+      "client_id": "client_2",
+      "modality": "image_only"
+    },
+    {
+      "client_id": "client_3",
+      "modality": "multimodal"
+    }
+  ],
   "fixed_controls": {
-    "clients": [
-      "client_1:text_only",
-      "client_2:image_only",
-      "client_3:multimodal"
-    ],
     "aggregation_method": "fedavg",
-    "lambda_cream": 0.1,
-    "proxy_client_id": "client_3",
-    "proxy_k_batches": 4,
+    "sample_weight": {
+      "symbol": "n_k",
+      "unit": "private_cases",
+      "definition": "client private training BraTS case or 3D volume count",
+      "excluded_units": [
+        "batches",
+        "2D_slices",
+        "optimizer_steps",
+        "public_cases",
+        "patches"
+      ]
+    },
+    "proxy": {
+      "client_id": "client_3",
+      "batches": 4,
+      "round_global_detached": true
+    },
     "client_init_policy": "round_global",
     "persist_client_optimizer": false,
     "rounds": 60,
     "local_epochs": 1,
-    "text_supervision": {
-      "loss": "prototype_logistic",
-      "temperature": 0.07
+    "reproducibility": {
+      "deterministic_algorithms": true,
+      "deterministic_warn_only": false,
+      "num_workers": 0,
+      "persistent_workers": false,
+      "recorded_state": [
+        "python_numpy_torch_cuda_seeds",
+        "client_round_loader_and_slice_generators",
+        "client_participation_order",
+        "public_proxy_batch_order",
+        "optimizer_and_scheduler_initial_state",
+        "configuration_and_data_manifest_sha256",
+        "git_and_runtime_environment"
+      ]
+    }
+  },
+  "local_objectives": {
+    "text_only": {
+      "task_loss": "L_text = mean_i softplus(-cos(normalize(text_proj(x_i)), g_t) / tau_text)",
+      "temperature": 0.07,
+      "global_target": "g_t is generated from fixed client_3 public multimodal data once per round and detached"
     },
-    "segmentation": {
-      "loss": "dice_bce",
-      "dice_weight": 1.0,
-      "bce_weight": 1.0,
-      "smooth": 1.0,
-      "thresholds": {
-        "WT": 0.5,
-        "TC": 0.5,
-        "ET": 0.5
-      }
+    "image_only": {
+      "task_loss": "L_seg = DiceLoss + BCEWithLogitsLoss"
+    },
+    "multimodal": {
+      "task_loss": "L_seg + lambda_cream * L_cream",
+      "lambda_cream": 0.1
+    },
+    "fedprox": {
+      "routing_does_not_change_local_objective": true,
+      "task_loss_is_unchanged": true,
+      "proximal_term": "mu / 2 * sum_{p in O_k} ||theta_{k,p} - theta_p^t||_2^2",
+      "reference": "shared round-global theta^t",
+      "optimizer_scope": "O_k only"
+    }
+  },
+  "segmentation_contract": {
+    "regions": [
+      "WT",
+      "TC",
+      "ET"
+    ],
+    "label_mapping": "BraTS 0/1/2/4 to [WT, TC, ET] and nested [WT, TC, ET] to BraTS 0/1/2/4",
+    "loss": "DiceLoss + BCEWithLogitsLoss",
+    "thresholds": {
+      "WT": 0.5,
+      "TC": 0.5,
+      "ET": 0.5
+    },
+    "empty_region_metrics": "fixed Dice, IoU, and HD95 empty-region rules"
+  },
+  "parameterwise_aggregation": {
+    "client_delta": "Delta_{k,p} = theta_{k,p} - theta_p^t",
+    "unrestricted": {
+      "routing_mode": "unrestricted",
+      "unoptimized_update_policy": "include_zero",
+      "eligible_clients": "K, all active clients",
+      "formula": "Delta_p^U = sum_{k in K}(n_k * Delta_{k,p}) / sum_{k in K}n_k",
+      "unoptimized_parameter_rule": "Delta_{k,p}=0 while n_k remains in the denominator"
+    },
+    "restricted": {
+      "routing_mode": "restricted",
+      "unoptimized_update_policy": "exclude_and_renormalize",
+      "eligible_clients": "K_p^R = {k | p in O_k and modality(k) in A(G(p))}",
+      "formula": "Delta_p^R = sum_{k in K_p^R}(n_k * Delta_{k,p}) / sum_{k in K_p^R}n_k",
+      "zero_gradient_rule": "an optimizer-scoped uploaded parameter remains eligible even when its numerical delta is zero",
+      "empty_eligible_rule": "preserve theta_p^t and write an aggregation audit event"
+    },
+    "parameter_groups": {
+      "TEXT_ADAPTER": [
+        "text_only",
+        "multimodal"
+      ],
+      "TEXT_PARAMS": [
+        "text_only",
+        "multimodal"
+      ],
+      "VISION_ADAPTER": [
+        "image_only",
+        "multimodal"
+      ],
+      "IMAGE_PARAMS": [
+        "image_only",
+        "multimodal"
+      ],
+      "FUSION_PARAMS": [
+        "multimodal"
+      ]
+    },
+    "parameter_buffer_boundary": {
+      "upload": "optimizer named parameters only",
+      "aggregate": "named parameters only",
+      "buffers": "server-owned; restored before each client, discarded after local training, never uploaded or aggregated",
+      "rope": "deterministically rebuilt"
     }
   },
   "matrix": [
     {
       "cell": "U-FedAvg",
-      "restricted_routing": false,
-      "fedprox": false,
+      "routing_mode": "unrestricted",
+      "unoptimized_update_policy": "include_zero",
+      "baseline_method": "none",
+      "fedprox_mu": 0.0,
       "config": "configs/fedsam3_2x2_u_fedavg.yaml"
     },
     {
       "cell": "U-FedProx",
-      "restricted_routing": false,
-      "fedprox": true,
-      "mu": 0.01,
+      "routing_mode": "unrestricted",
+      "unoptimized_update_policy": "include_zero",
+      "baseline_method": "fedprox",
+      "fedprox_mu": 0.01,
       "config": "configs/fedsam3_2x2_u_fedprox.yaml"
     },
     {
       "cell": "R-FedAvg",
-      "restricted_routing": true,
-      "fedprox": false,
+      "routing_mode": "restricted",
+      "unoptimized_update_policy": "exclude_and_renormalize",
+      "baseline_method": "none",
+      "fedprox_mu": 0.0,
       "config": "configs/fedsam3_2x2_r_fedavg.yaml"
     },
     {
       "cell": "R-FedProx",
-      "restricted_routing": true,
-      "fedprox": true,
-      "mu": 0.01,
+      "routing_mode": "restricted",
+      "unoptimized_update_policy": "exclude_and_renormalize",
+      "baseline_method": "fedprox",
+      "fedprox_mu": 0.01,
       "config": "configs/fedsam3_2x2_r_fedprox.yaml"
     }
   ],
-  "missing_modality_settings": [
-    {
-      "missing_modality_client_ratio": 0.6666666666666666,
-      "clients": [
-        "text_only",
-        "image_only",
-        "multimodal"
-      ],
-      "scope": "main_2x2"
-    },
-    {
-      "client_participation_ratio": 0.6666666666666666,
-      "missing_modality_client_ratio": 0.5,
-      "client_pool": [
-        "text_only",
-        "image_only",
-        "multimodal"
-      ],
-      "enabled_clients": [
-        "image_only",
-        "multimodal"
-      ],
-      "config": "configs/fedsam3_ratio_2of3_r_fedprox.yaml"
-    }
+  "matrix_unique_variables": [
+    "routing_mode",
+    "unoptimized_update_policy",
+    "baseline_method",
+    "fedprox_mu"
   ],
-  "diagnostic_groups": [
-    "VISION_ADAPTER",
-    "TEXT_ADAPTER",
-    "IMAGE_PARAMS",
-    "TEXT_PARAMS",
-    "FUSION_PARAMS"
-  ]
+  "ratio_experiment": {
+    "name": "2-of-3 R-FedProx",
+    "client_pool": [
+      "client_1",
+      "client_2",
+      "client_3"
+    ],
+    "enabled_client_ids": [
+      "client_2",
+      "client_3"
+    ],
+    "client_participation_ratio": 0.6666666666666666,
+    "routing_mode": "restricted",
+    "unoptimized_update_policy": "exclude_and_renormalize",
+    "baseline_method": "fedprox",
+    "fedprox_mu": 0.01,
+    "config": "configs/fedsam3_ratio_2of3_r_fedprox.yaml"
+  },
+  "diagnostics": {
+    "parameter_groups": [
+      "TEXT_ADAPTER",
+      "TEXT_PARAMS",
+      "VISION_ADAPTER",
+      "IMAGE_PARAMS",
+      "FUSION_PARAMS"
+    ],
+    "client_drift": [
+      "L2",
+      "relative_L2",
+      "update_RMS",
+      "parameter_count",
+      "numel",
+      "nonzero_parameter_ratio",
+      "sample_weight"
+    ],
+    "update_conflict": [
+      "shared_uploaded_parameters_only",
+      "cosine_similarity",
+      "angle",
+      "negative_cosine_ratio",
+      "conflict_rate",
+      "shared_parameter_count",
+      "shared_numel",
+      "modality_pair"
+    ],
+    "server_drift": [
+      "U_or_R_aggregated_group_L2",
+      "eligible_clients",
+      "normalized_aggregation_weights"
+    ]
+  }
 }
