@@ -64,10 +64,193 @@ class CreamAggregator:
         # 梯度冲突角度（由 federated_trainer 在聚合后读取写入 training_history）
         self._last_grad_conflict_deg: Optional[float] = None
         self._last_aggregation_audit: Dict[str, Any] = {}
+        self._round_buffer_snapshot: Optional[Dict[str, torch.Tensor]] = None
+        self._round_buffer_distribution_audit: Dict[str, Any] = {}
 
     # ──────────────────────────────────────────────────────────────────
     # 内部工具方法
     # ──────────────────────────────────────────────────────────────────
+
+    def _trainable_named_parameters(self) -> Dict[str, nn.Parameter]:
+        return {
+            name: parameter
+            for name, parameter in self.global_model.named_parameters()
+            if parameter.requires_grad
+        }
+
+    def get_trainable_parameter_snapshot(self) -> Dict[str, torch.Tensor]:
+        """Return a CPU snapshot of exactly the trainable named parameters."""
+        return {
+            name: parameter.detach().cpu().clone()
+            for name, parameter in self._trainable_named_parameters().items()
+        }
+
+    def apply_trainable_parameters(
+        self,
+        parameter_snapshot: Dict[str, torch.Tensor],
+    ) -> None:
+        """Copy an exact trainable-parameter snapshot without touching buffers."""
+        named_parameters = self._trainable_named_parameters()
+        if set(parameter_snapshot) != set(named_parameters):
+            missing = sorted(set(named_parameters) - set(parameter_snapshot))
+            unexpected = sorted(set(parameter_snapshot) - set(named_parameters))
+            raise ValueError(
+                "Trainable parameter snapshot must match the model exactly; "
+                f"missing={missing[:5]}, unexpected={unexpected[:5]}"
+            )
+
+        with torch.no_grad():
+            for name, parameter in named_parameters.items():
+                source = parameter_snapshot[name]
+                if not isinstance(source, torch.Tensor):
+                    raise TypeError(
+                        f"Trainable parameter snapshot value must be a tensor: {name}"
+                    )
+                if source.shape != parameter.shape:
+                    raise ValueError(
+                        f"Trainable parameter snapshot shape mismatch for {name}: "
+                        f"expected {tuple(parameter.shape)}, got {tuple(source.shape)}"
+                    )
+                if source.dtype != parameter.dtype:
+                    raise ValueError(
+                        f"Trainable parameter snapshot dtype mismatch for {name}: "
+                        f"expected {parameter.dtype}, got {source.dtype}"
+                    )
+                parameter.copy_(source.to(parameter.device))
+
+    def _buffer_inventory(
+        self,
+    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+        """Return registered persistent and nonpersistent buffers by full name."""
+        named_buffers = dict(self.global_model.named_buffers())
+        nonpersistent_names = set()
+        for module_prefix, module in self.global_model.named_modules():
+            for buffer_name in module._non_persistent_buffers_set:
+                full_name = (
+                    f"{module_prefix}.{buffer_name}"
+                    if module_prefix
+                    else buffer_name
+                )
+                if full_name in named_buffers:
+                    nonpersistent_names.add(full_name)
+
+        persistent_buffers = {
+            name: buffer
+            for name, buffer in named_buffers.items()
+            if name not in nonpersistent_names
+        }
+        nonpersistent_buffers = {
+            name: named_buffers[name]
+            for name in sorted(nonpersistent_names)
+        }
+        return persistent_buffers, nonpersistent_buffers
+
+    @staticmethod
+    def _clone_buffer_snapshot(
+        buffers: Dict[str, torch.Tensor],
+    ) -> Dict[str, torch.Tensor]:
+        return {
+            name: buffer.detach().cpu().clone()
+            for name, buffer in buffers.items()
+        }
+
+    def capture_round_buffer_snapshot(self) -> Dict[str, torch.Tensor]:
+        """Capture the server-owned persistent buffers for one federated round."""
+        persistent_buffers, nonpersistent_buffers = self._buffer_inventory()
+        self._round_buffer_snapshot = self._clone_buffer_snapshot(persistent_buffers)
+        self._round_buffer_distribution_audit = {
+            "buffer_key_count": len(persistent_buffers) + len(nonpersistent_buffers),
+            "persistent_buffer_key_count": len(persistent_buffers),
+            "nonpersistent_buffer_key_count": len(nonpersistent_buffers),
+            "snapshot_key_count": len(self._round_buffer_snapshot),
+            "restore_events": [],
+        }
+        return self._clone_buffer_snapshot(self._round_buffer_snapshot)
+
+    def _rebuild_nonpersistent_buffers(self) -> int:
+        """Rebuild deterministic nonpersistent buffers instead of copying clients' state."""
+        _, nonpersistent_buffers = self._buffer_inventory()
+        if not nonpersistent_buffers:
+            return 0
+
+        reset_rope_frequencies = getattr(
+            self.global_model, "reset_rope_frequencies", None
+        )
+        if not callable(reset_rope_frequencies):
+            raise RuntimeError(
+                "Nonpersistent buffers require a deterministic "
+                "model.reset_rope_frequencies() rebuild function"
+            )
+        rebuilt_count = reset_rope_frequencies(verbose=False)
+        if rebuilt_count is None:
+            return 0
+        if isinstance(rebuilt_count, bool) or not isinstance(rebuilt_count, int):
+            raise RuntimeError(
+                "reset_rope_frequencies() must return an integer rebuild count"
+            )
+        return rebuilt_count
+
+    def restore_round_buffer_snapshot(
+        self,
+        buffer_snapshot: Optional[Dict[str, torch.Tensor]] = None,
+        *,
+        reason: str,
+    ) -> None:
+        """Restore server buffers and deterministically rebuild nonpersistent buffers."""
+        if buffer_snapshot is None:
+            buffer_snapshot = self._round_buffer_snapshot
+        if buffer_snapshot is None:
+            raise RuntimeError("No round buffer snapshot is available to restore")
+
+        persistent_buffers, nonpersistent_buffers = self._buffer_inventory()
+        if set(buffer_snapshot) != set(persistent_buffers):
+            missing = sorted(set(persistent_buffers) - set(buffer_snapshot))
+            unexpected = sorted(set(buffer_snapshot) - set(persistent_buffers))
+            raise ValueError(
+                "Persistent buffer snapshot must match the model exactly; "
+                f"missing={missing[:5]}, unexpected={unexpected[:5]}"
+            )
+
+        with torch.no_grad():
+            for name, buffer in persistent_buffers.items():
+                source = buffer_snapshot[name]
+                if not isinstance(source, torch.Tensor):
+                    raise TypeError(
+                        f"Persistent buffer snapshot value must be a tensor: {name}"
+                    )
+                if source.shape != buffer.shape:
+                    raise ValueError(
+                        f"Persistent buffer snapshot shape mismatch for {name}: "
+                        f"expected {tuple(buffer.shape)}, got {tuple(source.shape)}"
+                    )
+                if source.dtype != buffer.dtype:
+                    raise ValueError(
+                        f"Persistent buffer snapshot dtype mismatch for {name}: "
+                        f"expected {buffer.dtype}, got {source.dtype}"
+                    )
+                buffer.copy_(source.to(buffer.device))
+
+        rebuilt_count = self._rebuild_nonpersistent_buffers()
+        self._round_buffer_distribution_audit.setdefault("restore_events", []).append(
+            {
+                "reason": str(reason),
+                "restored_persistent_buffer_key_count": len(persistent_buffers),
+                "rebuilt_nonpersistent_buffer_key_count": len(nonpersistent_buffers),
+                "rebuilt_rope_block_count": rebuilt_count,
+            }
+        )
+
+    def get_round_buffer_distribution_audit(self) -> Dict[str, Any]:
+        """Return a detached plain-data record of the current round buffer policy."""
+        return {
+            **self._round_buffer_distribution_audit,
+            "restore_events": [
+                dict(event)
+                for event in self._round_buffer_distribution_audit.get(
+                    "restore_events", []
+                )
+            ],
+        }
 
     def _is_vision_param(self, param_name: str) -> bool:
         """判断参数是否属于视觉侧（IMAGE_PARAMS 或 VISION_ADAPTER）。"""
@@ -362,11 +545,7 @@ class CreamAggregator:
             if not isinstance(client_updates[client_id], dict):
                 raise TypeError(f"client_updates[{client_id}] must be a dictionary")
 
-        model_parameters = {
-            name: parameter
-            for name, parameter in self.global_model.named_parameters()
-            if parameter.requires_grad
-        }
+        model_parameters = self._trainable_named_parameters()
         if set(round_global_parameters) != set(model_parameters):
             missing = sorted(set(model_parameters) - set(round_global_parameters))
             unexpected = sorted(set(round_global_parameters) - set(model_parameters))
@@ -521,6 +700,7 @@ class CreamAggregator:
                 "empty_eligible": False,
             }
 
+        persistent_buffers, nonpersistent_buffers = self._buffer_inventory()
         self._last_aggregation_audit = {
             "aggregation_method": "fedavg",
             "routing_mode": routing_mode,
@@ -530,7 +710,9 @@ class CreamAggregator:
                 for client_id in active_client_ids
             },
             "parameter_key_count": len(aggregated_parameters),
-            "buffer_key_count": len(dict(self.global_model.named_buffers())),
+            "buffer_key_count": len(persistent_buffers) + len(nonpersistent_buffers),
+            "persistent_buffer_key_count": len(persistent_buffers),
+            "nonpersistent_buffer_key_count": len(nonpersistent_buffers),
             "empty_eligible_parameter_names": empty_eligible_parameter_names,
             "parameters": parameter_audit,
         }
@@ -882,21 +1064,15 @@ class CreamAggregator:
 
     def set_global_model(self, model: SAM3_Medical):
         self.global_model = model.to(self.device)
+        self._round_buffer_snapshot = None
+        self._round_buffer_distribution_audit = {}
 
     def get_state_dict(self) -> Dict[str, Any]:
-        """
-        获取服务器状态字典（用于检查点保存）。
-        仅保留可训练参数及 Adapter/Decoder 相关 Buffer，防止检查点膨胀。
-        """
-        trainable_names = {name for name, p in self.global_model.named_parameters() if p.requires_grad}
-        full_sd = self.global_model.state_dict()
-        filtered_sd = {
-            k: v.clone().cpu()
-            for k, v in full_sd.items()
-            if k in trainable_names or 'adapter' in k.lower() or 'decoder' in k.lower()
-        }
+        """Save explicit server-owned parameters and persistent buffers."""
+        persistent_buffers, _ = self._buffer_inventory()
         return {
-            'model_state_dict': filtered_sd,
+            'trainable_parameters': self.get_trainable_parameter_snapshot(),
+            'persistent_buffers': self._clone_buffer_snapshot(persistent_buffers),
             'global_text_rep': self.global_text_rep.cpu().clone(),
             'global_image_rep': self.global_image_rep.cpu().clone(),
             'aggregation_method': self.aggregation_method,
@@ -904,17 +1080,19 @@ class CreamAggregator:
         }
 
     def load_state_dict(self, state_dict: Dict[str, Any], strict: bool = True):
-        """从状态字典加载服务器状态（用于检查点恢复）。"""
-        if 'model_state_dict' in state_dict:
-            missing_keys, unexpected_keys = self.global_model.load_state_dict(
-                state_dict['model_state_dict'], strict=False
+        """Restore explicit server-owned parameters and persistent buffers."""
+        required_keys = {'trainable_parameters', 'persistent_buffers'}
+        missing_keys = sorted(required_keys - set(state_dict))
+        if missing_keys:
+            raise RuntimeError(
+                "Server checkpoint is missing explicit state fields: "
+                f"{missing_keys}"
             )
-            trainable_names = {n for n, p in self.global_model.named_parameters() if p.requires_grad}
-            missing_trainable = [k for k in missing_keys if k in trainable_names]
-            if missing_trainable:
-                raise RuntimeError(f"致命错误: 服务器检查点缺失关键可训练参数! {missing_trainable}")
-            if unexpected_keys:
-                print(f"警告: 服务器检查点包含未知键: {unexpected_keys}")
+        self.apply_trainable_parameters(state_dict['trainable_parameters'])
+        self.restore_round_buffer_snapshot(
+            state_dict['persistent_buffers'],
+            reason='checkpoint_restore',
+        )
 
         if 'global_text_rep' in state_dict:
             self.global_text_rep = state_dict['global_text_rep'].to(self.device)

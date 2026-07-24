@@ -1,0 +1,62 @@
+iteration_id: phase-1g-a-20260724-001
+base_commit: 774a3904061fc5c6dcac2fb3013927c25c44f2fd
+target_remote: origin
+target_branch: main
+scope:
+  requirement_ids:
+    - 1G
+  files_to_modify:
+    - src/server.py
+    - src/federated_trainer.py
+    - tests/test_buffer_distribution_contract.py
+  files_to_add:
+    - docs/iterations/phase-1g-a-20260724-001.yaml
+  files_to_delete: []
+  approved_file_limit_exception: user-approved iteration record in addition to the three implementation files
+contracts_affected:
+  - aggregate_weights and client uploads remain named-parameter-only
+  - each round captures one server-owned persistent-buffer snapshot
+  - every serial client begins from the same snapshot and cannot donate local buffer mutations
+  - nonpersistent buffers are rebuilt deterministically instead of uploaded or aggregated
+  - checkpoints restore parameters and server-owned persistent buffers without model.load_state_dict
+data_flow:
+  input:
+    - global model named_parameters
+    - global model named_buffers
+    - round-global persistent-buffer snapshot
+    - parameter-only server aggregation result
+  transformation:
+    - use direct named-parameter copy for client initialization, pre-aggregation restore, aggregate application, and checkpoint restore
+    - restore the server buffer snapshot before and after every client and both sides of server aggregation
+    - rebuild nonpersistent buffers through the model's deterministic RoPE reset function
+  output:
+    - parameter-only model update path
+    - server-owned buffer snapshot and restore audit per round
+side_effects:
+  - trainer no longer imports or invokes scripts.serial_training_utils state-dict loading helpers
+  - old external aggregation callers that still use legacy signatures remain deferred to phase 1M; no compatibility path is added
+acceptance_tests:
+  - changing simulated client BatchNorm buffers in different client orders leaves final server buffers identical
+  - buffer snapshots and server checkpoints restore only registered persistent buffers plus deterministic nonpersistent rebuild
+  - strict aggregation output contains no named_buffers keys and its audit reports parameter and buffer counts separately
+  - strict trainer round path contains no full model load_state_dict or serial-training helper load
+static_validation:
+  - Python AST parsing for changed source and test definitions
+  - source-level checks for direct named-parameter copy and explicit buffer snapshot restores
+  - YAML parsing for this iteration record
+  - git diff whitespace check
+  - no local test execution, training, smoke run, model forward, or model backward
+known_followups:
+  - phase 1H must record parameter-group forward-to-aggregate effectiveness
+  - phase 1I must align conflict and drift diagnostics with common optimizer uploads
+  - phase 1K must persist all sampler, slice, augmentation, and client-order random states
+  - phase 1M must present the obsolete legacy aggregation tests and callers for deletion or migration approval
+local_prohibited_actions:
+  - training
+  - smoke_run
+  - model_forward
+  - model_backward
+backup_tag: backup/pre-phase-1g-a-20260724-001
+implementation_commit: PENDING
+origin_main_confirmed: PENDING
+status: IN_PROGRESS
