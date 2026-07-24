@@ -1,0 +1,48 @@
+iteration_id: phase-1l-b-20260724-001
+base_commit: 8b194b0bcf1c3fb86f8fa4c809076583c0ac50a2
+target_remote: origin
+target_branch: main
+scope:
+  requirement_ids:
+    - 1L
+  files_to_modify:
+    - configs/fedsam3_2x2_r_fedprox.yaml
+    - configs/fedsam3_ratio_2of3_r_fedprox.yaml
+    - configs/fedsam3_experiment_manifest.json
+  files_to_add:
+    - docs/iterations/phase-1l-b-20260724-001.yaml
+  files_to_delete: []
+  approved_file_limit_exception: user-approved iteration record in addition to the three configuration files
+contracts_affected:
+  - strict deterministic and single-process loader settings are explicit in every experiment YAML
+  - the manifest uses routing_mode and unoptimized_update_policy rather than a decoupled-routing boolean
+  - the manifest fixes local objectives, FedProx scope, parameterwise U/R formulas, private-case weights, buffer ownership, diagnostics, and the 2-of-3 experiment
+data_flow:
+  input:
+    - experiment YAML and manifest fields
+  transformation:
+    - encode the four-cell and ratio experiment protocol without compatibility fields
+  output:
+    - resolved experiment configurations and machine-readable manifest
+side_effects:
+  - no configuration retains restricted_routing or another ambiguous routing field
+acceptance_tests:
+  - both YAML files parse and satisfy restricted routing with exclude-and-renormalize
+  - manifest matrix maps each cell to routing mode, policy, baseline method, and FedProx mu
+  - manifest records all five parameter groups, buffer ownership, and private-case sample weighting
+static_validation:
+  - YAML and JSON parsing with protocol assertions
+  - source-level rejection of restricted_routing in the manifest
+  - git diff whitespace check
+  - no local test execution, training, smoke run, model forward, or model backward
+known_followups:
+  - phase 1M must present obsolete legacy aggregation callers and tests for explicit migration or deletion approval
+local_prohibited_actions:
+  - training
+  - smoke_run
+  - model_forward
+  - model_backward
+backup_tag: backup/pre-phase-1l-b-20260724-001
+implementation_commit: PENDING
+origin_main_confirmed: PENDING
+status: IN_PROGRESS
