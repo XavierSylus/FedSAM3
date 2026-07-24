@@ -72,6 +72,29 @@ def main() -> int:
     model_config = config.get("model", {})
     federated_config = config.get("federated", {})
     server_config = config.get("server", {})
+    system_config = config.get("system", {})
+    _require(isinstance(system_config, dict), "system config must be a mapping")
+
+    sys.path.insert(0, str(PROJECT_ROOT))
+    from src.config_manager import REPRODUCIBILITY_CONTRACTS
+
+    reproducibility_mode = system_config.get("reproducibility_mode")
+    expected_determinism = (
+        REPRODUCIBILITY_CONTRACTS.get(reproducibility_mode)
+        if isinstance(reproducibility_mode, str)
+        else None
+    )
+    _require(
+        expected_determinism is not None,
+        "system.reproducibility_mode is invalid",
+    )
+    deterministic_algorithms = system_config.get("deterministic_algorithms")
+    deterministic_warn_only = system_config.get("deterministic_warn_only")
+    _require(
+        deterministic_algorithms is expected_determinism[0]
+        and deterministic_warn_only is expected_determinism[1],
+        "system deterministic settings do not match reproducibility_mode",
+    )
 
     checkpoint = PROJECT_ROOT / model_config.get(
         "sam3_checkpoint",
@@ -116,7 +139,6 @@ def main() -> int:
     torch = importlib.import_module("torch")
     _require(torch.cuda.is_available(), "CUDA is required for production training")
 
-    sys.path.insert(0, str(PROJECT_ROOT))
     importlib.import_module("src.integrated_model")
     importlib.import_module("src.federated_trainer")
 
@@ -125,6 +147,17 @@ def main() -> int:
         "config": str(config_path.relative_to(PROJECT_ROOT)),
         "git_commit": git_commit,
         "seed": seed,
+        "reproducibility": {
+            "mode": reproducibility_mode,
+            "deterministic_algorithms": deterministic_algorithms,
+            "deterministic_warn_only": deterministic_warn_only,
+            "bitwise_reproducible": reproducibility_mode == "strict",
+            "known_nondeterministic_operation": (
+                "grid_sampler_2d_backward_cuda"
+                if reproducibility_mode == "best_effort_cuda"
+                else None
+            ),
+        },
         "proxy_client_id": proxy_client_id,
         "enabled_clients": [
             {
