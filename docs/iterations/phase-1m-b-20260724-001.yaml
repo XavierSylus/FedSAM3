@@ -1,0 +1,35 @@
+iteration_id: phase-1m-b-20260724-001
+base_commit: f15d8c81d6750f90de1afe86d9ba31c80c161735
+target_remote: origin
+target_branch: main
+scope:
+  requirement_ids:
+    - 1M
+  files_to_delete:
+    - tests/test_server_aggregation_guard.py
+    - tests/test_fedprox_config.py
+    - tests/test_amp_and_dataset_fix.py
+  files_to_add:
+    - docs/iterations/phase-1m-b-20260724-001.yaml
+  approved_file_limit_exception: user-approved iteration record in addition to the three deleted test files
+deletion_rationale:
+  - test_server_aggregation_guard.py verifies complete-state automatic filling through _safe_fill_missing_params
+  - test_fedprox_config.py verifies Group A/B/C configurations and use_decoupled_agg
+  - test_amp_and_dataset_fix.py copies outdated optimization logic and tests the inactive data.dataset_loader path
+contracts_preserved:
+  - test_fedprox_same_loss_contract.py covers the current FedAvg and FedProx objective contract
+  - test_optimizer_upload_contract.py covers optimizer-scoped uploads
+static_validation:
+  - confirm each approved legacy test is absent
+  - confirm strict FedProx and optimizer-upload tests remain present
+  - git diff whitespace check
+  - no local test execution, training, smoke run, model forward, or model backward
+local_prohibited_actions:
+  - training
+  - smoke_run
+  - model_forward
+  - model_backward
+backup_tag: backup/pre-phase-1m-b-20260724-001
+implementation_commit: PENDING
+origin_main_confirmed: PENDING
+status: IN_PROGRESS
