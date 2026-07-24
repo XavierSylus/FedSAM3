@@ -1,0 +1,17 @@
+phase: 1N-C
+base_commit: e8668f1f0ea24bd43af9f525d13b847e4c66c3be
+backup_tag: backup/pre-phase-1n-c-20260724-001
+scope:
+  implementation_files:
+    - tests/test_federated_aggregation_wiring.py
+  audit_record: docs/iterations/phase-1n-c-20260724-001.yaml
+actions:
+  - verify private-case aggregation weighting through AST assignment and validation structure
+  - verify round-global and non-finite upload errors through AST exception-message literals
+verification:
+  - static Python AST contract check
+  - diff check
+runtime_validation: deferred_to_server
+implementation_commit: c220b3136ad37910dc31970b08d04f6162730b63
+origin_main_confirmed: c220b3136ad37910dc31970b08d04f6162730b63
+status: COMPLETE
