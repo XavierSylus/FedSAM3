@@ -1,0 +1,20 @@
+phase: 1M-F
+base_commit: 0e80c6a03e5a63941ece8b1560c621f0cbc9a57b
+backup_tag: backup/pre-phase-1m-f-20260724-001
+scope:
+  implementation_files:
+    - configs/exp_group_a.yaml
+    - configs/exp_group_b.yaml
+    - configs/exp_group_c.yaml
+  audit_record: docs/iterations/phase-1m-f-20260724-001.yaml
+actions:
+  - remove the obsolete Group A, B, and C configurations
+  - retain the explicit U/R four-cell matrix and ratio configuration as the only experiment protocol
+verification:
+  - static YAML inventory
+  - static legacy-flag scan over retained configuration files
+  - diff check
+runtime_validation: deferred_to_server
+implementation_commit: 2a83eed95ebd9395c1e400676b6bd1eef15ccdce
+origin_main_confirmed: 2a83eed95ebd9395c1e400676b6bd1eef15ccdce
+status: COMPLETE
