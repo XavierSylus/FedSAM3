@@ -473,11 +473,10 @@ class TestRealSAM3ArchitectureOnMeta:
 
 
 class TestStateDictCompatibilityOnMeta:
-    """Meta 设备上的 State-Dict 键名兼容性验证。
+    """Meta 设备上的 State-Dict 参数键一致性验证。
 
-    SAM3MedicalIntegrated 重写了 state_dict() 来保证联邦聚合的键名兼容。
-    在 Meta 设备上，state_dict() 返回的是 Meta Tensor 的字典，
-    但键名（Key）的验证逻辑与真实 Tensor 完全相同。
+    联邦上传与聚合使用原生 named_parameters() 键名，state_dict()
+    必须保留相同的真实子模块前缀。
     """
 
     @pytest.fixture
@@ -490,33 +489,22 @@ class TestStateDictCompatibilityOnMeta:
                 device='meta', embed_dim=768,
             )
 
-    def test_state_dict_no_submodule_prefix(self, mock_meta_model):
-        """验证 Meta 模型的 state_dict() 重写在 Meta 设备上正确去除子模块前缀。
-
-        核心约束（联邦聚合）：
-          adapter_manager.adapters.0.down_proj.weight  ->  adapters.0.down_proj.weight
-          fusion_head.text_proj.0.weight               ->  text_proj.0.weight
-        """
+    def test_state_dict_matches_native_named_parameter_keys(self, mock_meta_model):
+        """验证 state_dict() 包含所有原生 named_parameters() 键。"""
         sd = mock_meta_model.state_dict()
+        named_parameter_keys = set(dict(mock_meta_model.named_parameters()))
+        missing_keys = sorted(named_parameter_keys - set(sd))
 
-        leaked_keys = [
-            k for k in sd
-            if k.startswith('adapter_manager.') or k.startswith('fusion_head.')
-        ]
-        assert not leaked_keys, (
-            f"state_dict 泄漏了子模块前缀，影响联邦聚合！\n"
-            f"泄漏的键: {leaked_keys[:5]}"
+        assert not missing_keys, (
+            "state_dict 缺少原生 named_parameters 键: "
+            f"{missing_keys[:5]}"
         )
+        assert any(k.startswith('adapter_manager.') for k in sd)
+        assert any(k.startswith('fusion_head.') for k in sd)
+        assert not any(k.startswith('adapters.') for k in sd)
+        assert not any(k.startswith('text_proj.') for k in sd)
 
-        adapter_keys = [k for k in sd if k.startswith('adapters.') or k.startswith('wrapped_blocks.')]
-        proj_keys = [k for k in sd if k.startswith('text_proj.') or k.startswith('image_proj.')]
-
-        assert len(adapter_keys) > 0, "state_dict 应包含 adapters.* 键"
-        assert len(proj_keys) > 0, "state_dict 应包含 text_proj.* / image_proj.* 键"
-
-        print(f"\n  Meta state_dict 键名校验通过（共 {len(sd)} 个键）")
-        print(f"  adapter keys 样本: {adapter_keys[:2]}")
-        print(f"  proj    keys 样本: {proj_keys[:2]}")
+        print(f"\n  Meta state_dict 原生键名校验通过（共 {len(sd)} 个键）")
 
     def test_meta_model_memory_footprint(self, mock_meta_model):
         """量化展示 Meta 模型的内存优势。"""
@@ -588,7 +576,7 @@ def smoke_test_meta_injector():
     print(f"  注入 {num_adapters} 个 Adapter，shape 验证通过")
     print(f"    down_proj: {down_shape}, up_proj: {up_shape}")
 
-    print("\n[4/4] State-dict 键名兼容性验证...")
+    print("\n[4/4] State-dict 原生参数键一致性验证...")
     with torch.device('meta'):
         model_with_adapter = SAM3MedicalIntegrated(
             img_size=256, num_classes=3, adapter_dim=64,
@@ -596,9 +584,12 @@ def smoke_test_meta_injector():
             device='meta', embed_dim=768,
         )
     sd = model_with_adapter.state_dict()
-    leaked = [k for k in sd if k.startswith('adapter_manager.') or k.startswith('fusion_head.')]
-    assert not leaked, f"state_dict 前缀泄漏: {leaked}"
-    print(f"  state_dict 共 {len(sd)} 个键，无子模块前缀泄漏")
+    named_parameter_keys = set(dict(model_with_adapter.named_parameters()))
+    missing = sorted(named_parameter_keys - set(sd))
+    assert not missing, f"state_dict 缺少原生参数键: {missing[:5]}"
+    assert any(k.startswith('adapter_manager.') for k in sd)
+    assert any(k.startswith('fusion_head.') for k in sd)
+    print(f"  state_dict 共 {len(sd)} 个键，原生参数键完整")
 
     print("\n" + "=" * 65)
     print("所有冒烟测试通过！（实际内存占用: 0 bytes）")
