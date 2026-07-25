@@ -24,6 +24,32 @@ MATRIX_EXPECTATIONS = {
     ),
 }
 
+EXPECTED_DATA_ROOT = (
+    "/autodl-fs/data/FedSAM3-Cream/datasets/federated_split"
+)
+EXPECTED_LOG_DIRS = {
+    "fedsam3_2x2_u_fedavg.yaml": (
+        "/autodl-fs/data/FedSAM3-Cream/experiments/logs/"
+        "fedsam3_2x2/u_fedavg"
+    ),
+    "fedsam3_2x2_u_fedprox.yaml": (
+        "/autodl-fs/data/FedSAM3-Cream/experiments/logs/"
+        "fedsam3_2x2/u_fedprox"
+    ),
+    "fedsam3_2x2_r_fedavg.yaml": (
+        "/autodl-fs/data/FedSAM3-Cream/experiments/logs/"
+        "fedsam3_2x2/r_fedavg"
+    ),
+    "fedsam3_2x2_r_fedprox.yaml": (
+        "/autodl-fs/data/FedSAM3-Cream/experiments/logs/"
+        "fedsam3_2x2/r_fedprox"
+    ),
+    "fedsam3_ratio_2of3_r_fedprox.yaml": (
+        "/autodl-fs/data/FedSAM3-Cream/experiments/logs/"
+        "fedsam3_ratio/2of3_r_fedprox"
+    ),
+}
+
 
 def _load_yaml(filename: str) -> dict:
     path = PROJECT_ROOT / "configs" / filename
@@ -35,6 +61,13 @@ def _client_modalities(config: dict) -> dict:
         client["client_id"]: (client["modality"], client["enabled"])
         for client in config["federated"]["clients"]
     }
+
+
+def test_server_storage_paths_are_explicit_and_isolated():
+    for filename, expected_log_dir in EXPECTED_LOG_DIRS.items():
+        config = _load_yaml(filename)
+        assert config["data_root"] == EXPECTED_DATA_ROOT
+        assert config["logging"]["log_dir"] == expected_log_dir
 
 
 def test_main_matrix_exposes_only_routing_and_fedprox_variables():
