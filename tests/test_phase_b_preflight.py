@@ -5,6 +5,13 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = "/autodl-fs/data/FedSAM3-Cream/datasets/federated_split"
+SMOKE_LOG_DIR = (
+    "/autodl-fs/data/FedSAM3-Cream/experiments/logs/tests/phase_b_smoke"
+)
+DIRECT_LOG_DIR = (
+    "/autodl-fs/data/FedSAM3-Cream/experiments/logs/tests/phase_b_direct"
+)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -30,7 +37,7 @@ def test_importing_client_does_not_import_metrics():
     assert "src.metrics" not in sys.modules
 
 
-def test_main_sets_default_log_dir_before_trainer_init(monkeypatch):
+def test_main_preserves_explicit_log_dir_before_trainer_init(monkeypatch):
     config_path = PROJECT_ROOT / "tests" / ".phase_b_smoke.yaml"
     captured = {}
 
@@ -55,13 +62,22 @@ def test_main_sets_default_log_dir_before_trainer_init(monkeypatch):
     config_path.write_text(
         "\n".join(
             [
-                "data_root: data/federated_split",
+                f"data_root: {DATA_ROOT}",
+                "federated:",
+                "  routing_mode: unrestricted",
+                "  client_init_policy: round_global",
+                "  persist_client_optimizer: false",
+                "aggregation:",
+                "  method: fedavg",
+                "  sample_weight_unit: private_cases",
+                "  unoptimized_update_policy: include_zero",
                 "training:",
                 "  rounds: 1",
                 "options:",
                 "  use_dummy: true",
                 "logging:",
                 "  log_type: none",
+                f"  log_dir: {SMOKE_LOG_DIR}",
             ]
         ),
         encoding="utf-8",
@@ -73,23 +89,27 @@ def test_main_sets_default_log_dir_before_trainer_init(monkeypatch):
 
         assert exit_code == 0
         assert captured["config"].device == "cpu"
-        assert captured["config"].log_dir == str(Path("data/federated_split") / "logs")
+        assert captured["config"].log_dir == SMOKE_LOG_DIR
     finally:
         config_path.unlink(missing_ok=True)
 
 
-def test_federated_trainer_sets_default_log_dir_on_direct_init():
+def test_federated_trainer_uses_explicit_log_dir_on_direct_init():
     from src.config_manager import FederatedConfig
     from src.federated_trainer import FederatedTrainer
 
     config = FederatedConfig(
-        data_root="data/federated_split",
-        log_dir=None,
+        data_root=DATA_ROOT,
+        log_dir=DIRECT_LOG_DIR,
         use_mock=True,
         device="cpu",
+        aggregation_method="fedavg",
+        routing_mode="unrestricted",
+        sample_weight_unit="private_cases",
+        unoptimized_update_policy="include_zero",
     )
 
     trainer = FederatedTrainer(config)
 
-    assert trainer.config.log_dir == str(Path("data/federated_split") / "logs")
-    assert trainer.checkpoint_dir == Path("data/federated_split") / "logs" / "checkpoints"
+    assert trainer.config.log_dir == DIRECT_LOG_DIR
+    assert trainer.checkpoint_dir == Path(DIRECT_LOG_DIR) / "checkpoints"
