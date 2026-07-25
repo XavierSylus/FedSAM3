@@ -1,5 +1,5 @@
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
@@ -26,6 +26,14 @@ MATRIX_EXPECTATIONS = {
 
 EXPECTED_DATA_ROOT = (
     "/autodl-fs/data/FedSAM3-Cream/datasets/federated_split"
+)
+EXPECTED_SAM3_CHECKPOINT = (
+    "/autodl-fs/data/FedSAM3-Cream/datasets/checkpoints/sam3.pt"
+)
+S2_CONFIG_FILENAME = "fedsam3_s2_three_client_preflight.yaml"
+EXPECTED_S2_LOG_DIR = (
+    "/autodl-fs/data/FedSAM3-Cream/experiments/logs/"
+    "server_s2_three_client_preflight"
 )
 EXPECTED_LOG_DIRS = {
     "fedsam3_2x2_u_fedavg.yaml": (
@@ -68,6 +76,33 @@ def test_server_storage_paths_are_explicit_and_isolated():
         config = _load_yaml(filename)
         assert config["data_root"] == EXPECTED_DATA_ROOT
         assert config["logging"]["log_dir"] == expected_log_dir
+
+
+def test_s2_config_uses_external_manifests_and_a_small_validation_window():
+    config = _load_yaml(S2_CONFIG_FILENAME)
+
+    assert config["data_root"] == EXPECTED_DATA_ROOT
+    assert config["max_samples"] == 1
+    assert config["training"]["rounds"] == 1
+    assert config["training"]["local_epochs"] == 2
+    assert config["training"]["accumulation_steps"] == 1
+    assert config["model"]["sam3_checkpoint"] == EXPECTED_SAM3_CHECKPOINT
+    assert config["logging"]["log_dir"] == EXPECTED_S2_LOG_DIR
+
+    for client in config["federated"]["clients"]:
+        data_source = PurePosixPath(client["data_source"])
+        assert data_source.is_absolute()
+        assert str(data_source).startswith(f"{EXPECTED_DATA_ROOT}/")
+
+
+def test_s2_max_samples_is_loaded_into_the_runtime_config():
+    from src.config_manager import FederatedConfig
+
+    config_path = PROJECT_ROOT / "configs" / S2_CONFIG_FILENAME
+    runtime_config = FederatedConfig.from_yaml(str(config_path))
+
+    assert runtime_config.max_samples == 1
+    assert runtime_config.sam3_checkpoint == EXPECTED_SAM3_CHECKPOINT
 
 
 def test_main_matrix_exposes_only_routing_and_fedprox_variables():

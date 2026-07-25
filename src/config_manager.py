@@ -508,6 +508,8 @@ class FederatedConfig:
         # 处理模型配置
         if 'model' in config_dict:
             model = config_dict['model']
+            if 'sam3_checkpoint' in model:
+                flattened['sam3_checkpoint'] = model['sam3_checkpoint']
             flattened['img_size'] = model.get('img_size', 256)
             flattened['embed_dim'] = model.get('embed_dim', 768)
             flattened['num_heads'] = model.get('num_heads')
@@ -683,6 +685,8 @@ class FederatedConfig:
         # 处理顶层配置
         if 'data_root' in config_dict:
             flattened['data_root'] = config_dict['data_root']
+        if 'max_samples' in config_dict:
+            flattened['max_samples'] = config_dict['max_samples']
         if 'device' in config_dict:
             flattened['device'] = config_dict['device']
         if 'seed' in config_dict:
