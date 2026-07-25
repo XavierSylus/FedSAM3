@@ -1,0 +1,99 @@
+seed: 3407
+data_root: /autodl-fs/data/FedSAM3-Cream/datasets/federated_split
+max_samples: 1
+federated:
+  clients:
+  - client_id: client_1
+    modality: text_only
+    data_source: /autodl-fs/data/FedSAM3-Cream/datasets/federated_split/client1_text_only/dataset.json
+    enabled: true
+  - client_id: client_2
+    modality: image_only
+    data_source: /autodl-fs/data/FedSAM3-Cream/datasets/federated_split/client2_image_only/dataset.json
+    enabled: true
+  - client_id: client_3
+    modality: multimodal
+    data_source: /autodl-fs/data/FedSAM3-Cream/datasets/federated_split/client3_multimodal/dataset.json
+    enabled: true
+  routing_mode: restricted
+  client_init_policy: round_global
+  persist_client_optimizer: false
+training:
+  batch_size: 1
+  effective_batch_size: 1
+  accumulation_steps: 1
+  learning_rate: 5.0e-05
+  seg_head_lr: 0.001
+  adapter_lr: 0.0001
+  weight_decay: 0.01
+  lr_scheduler: none
+  lr_warmup_rounds: 0
+  lr_min: 1.0e-06
+  rounds: 1
+  local_epochs: 2
+  grad_clip: 1.0
+cream:
+  lambda_cream: 0.1
+  tau: 0.07
+text_supervision:
+  loss: prototype_logistic
+  temperature: 0.07
+model:
+  sam3_checkpoint: /autodl-fs/data/FedSAM3-Cream/datasets/checkpoints/sam3.pt
+  img_size: 256
+  embed_dim: 768
+  text_dim: 768
+  decoder_dim: 256
+  num_classes: 3
+  adapter_skip: 64
+segmentation:
+  loss: dice_bce
+  dice_weight: 1.0
+  bce_weight: 1.0
+  smooth: 1.0
+  thresholds:
+    WT: 0.5
+    TC: 0.5
+    ET: 0.5
+server:
+  global_rep_alpha: 0.9
+  proxy_k_batches: 4
+  proxy_client_id: client_3
+  strict_aggregation_guard: true
+aggregation:
+  method: fedavg
+  sample_weight_unit: private_cases
+  unoptimized_update_policy: exclude_and_renormalize
+baseline:
+  method: fedprox
+  mu: 0.01
+options:
+  use_amp: true
+  use_dummy: false
+  strict_protocol_check: true
+  verbose_sanity_check: false
+logging:
+  log_type: tensorboard
+  log_dir: /autodl-fs/data/FedSAM3-Cream/experiments/logs/server_s2_three_client_preflight
+  experiment_name: FedSAM3_S2_ThreeClient_Preflight
+  wandb_project: FedSAM3-Cream
+  wandb_entity: null
+  log_interval: 1
+device: cuda
+checkpoint:
+  checkpoint_interval: 0
+  resume_from_checkpoint: null
+  keep_checkpoint_max: 1
+  save_best_model: true
+  save_final_model: true
+validation:
+  val_interval: 1
+  save_masks: false
+  max_masks: 3
+system:
+  reproducibility_mode: best_effort_cuda
+  deterministic_algorithms: true
+  deterministic_warn_only: true
+  num_workers: 0
+  pin_memory: true
+  persistent_workers: false
