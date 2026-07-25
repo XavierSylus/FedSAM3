@@ -1,5 +1,5 @@
 seed: 3407
-data_root: data/federated_split
+data_root: /autodl-fs/data/FedSAM3-Cream/datasets/federated_split
 federated:
   clients:
   - client_id: client_1
@@ -72,7 +72,7 @@ options:
   verbose_sanity_check: false
 logging:
   log_type: tensorboard
-  log_dir: logs/fedsam3_2x2/r_fedprox
+  log_dir: /autodl-fs/data/FedSAM3-Cream/experiments/logs/fedsam3_2x2/r_fedprox
   experiment_name: FedSAM3_2x2_R_FedProx
   wandb_project: FedSAM3-Cream
   wandb_entity: null
