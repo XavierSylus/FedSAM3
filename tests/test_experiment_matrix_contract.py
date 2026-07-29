@@ -30,6 +30,21 @@ EXPECTED_DATA_ROOT = (
 EXPECTED_SAM3_CHECKPOINT = (
     "/autodl-fs/data/FedSAM3-Cream/datasets/checkpoints/sam3.pt"
 )
+EXPECTED_DATA_SOURCES = {
+    "client_1": (
+        f"{EXPECTED_DATA_ROOT}/client1_text_only/dataset.json"
+    ),
+    "client_2": (
+        f"{EXPECTED_DATA_ROOT}/client2_image_only/dataset.json"
+    ),
+    "client_3": (
+        f"{EXPECTED_DATA_ROOT}/client3_multimodal/dataset.json"
+    ),
+}
+SERVER_ARTIFACT_CONFIGS = (
+    "fedsam3_2x2_u_fedavg.yaml",
+    "fedsam3_2x2_u_fedprox.yaml",
+)
 S2_CONFIG_FILENAME = "fedsam3_s2_three_client_preflight.yaml"
 EXPECTED_S2_LOG_DIR = (
     "/autodl-fs/data/FedSAM3-Cream/experiments/logs/"
@@ -71,11 +86,24 @@ def _client_modalities(config: dict) -> dict:
     }
 
 
+def _assert_server_artifact_paths(config: dict) -> None:
+    assert config["model"]["sam3_checkpoint"] == EXPECTED_SAM3_CHECKPOINT
+    assert {
+        client["client_id"]: client["data_source"]
+        for client in config["federated"]["clients"]
+    } == EXPECTED_DATA_SOURCES
+
+
 def test_server_storage_paths_are_explicit_and_isolated():
     for filename, expected_log_dir in EXPECTED_LOG_DIRS.items():
         config = _load_yaml(filename)
         assert config["data_root"] == EXPECTED_DATA_ROOT
         assert config["logging"]["log_dir"] == expected_log_dir
+
+
+def test_u_configs_use_external_server_artifacts():
+    for filename in SERVER_ARTIFACT_CONFIGS:
+        _assert_server_artifact_paths(_load_yaml(filename))
 
 
 def test_s2_config_uses_external_manifests_and_a_small_validation_window():
