@@ -1,6 +1,6 @@
 seed: 3407
 data_root: /autodl-fs/data/FedSAM3-Cream/datasets/federated_split
-max_samples: 1
+max_samples: 3
 federated:
   clients:
   - client_id: client_1
@@ -57,7 +57,7 @@ segmentation:
     ET: 0.5
 server:
   global_rep_alpha: 0.9
-  proxy_k_batches: 4
+  proxy_k_batches: 3
   proxy_client_id: client_3
   strict_aggregation_guard: true
 aggregation:

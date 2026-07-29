@@ -113,7 +113,7 @@ def test_s2_config_uses_external_manifests_and_a_small_validation_window():
     config = _load_yaml(S2_CONFIG_FILENAME)
 
     assert config["data_root"] == EXPECTED_DATA_ROOT
-    assert config["max_samples"] == 1
+    assert config["max_samples"] == 3
     assert config["training"]["rounds"] == 1
     assert config["training"]["local_epochs"] == 2
     assert config["training"]["accumulation_steps"] == 1
@@ -126,13 +126,21 @@ def test_s2_config_uses_external_manifests_and_a_small_validation_window():
         assert str(data_source).startswith(f"{EXPECTED_DATA_ROOT}/")
 
 
+def test_s2_proxy_cannot_use_one_public_text_as_its_own_alignment_target():
+    config = _load_yaml(S2_CONFIG_FILENAME)
+
+    assert config["max_samples"] >= 2
+    assert 2 <= config["server"]["proxy_k_batches"] <= config["max_samples"]
+
+
 def test_s2_max_samples_is_loaded_into_the_runtime_config():
     from src.config_manager import FederatedConfig
 
     config_path = PROJECT_ROOT / "configs" / S2_CONFIG_FILENAME
     runtime_config = FederatedConfig.from_yaml(str(config_path))
 
-    assert runtime_config.max_samples == 1
+    assert runtime_config.max_samples == 3
+    assert runtime_config.proxy_k_batches == 3
     assert runtime_config.sam3_checkpoint == EXPECTED_SAM3_CHECKPOINT
 
 

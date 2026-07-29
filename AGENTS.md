@@ -18,4 +18,5 @@
 - 本项目的版本备份与修改后提交统一推送到 GitHub remote `origin`（`XavierSylus/FedSAM3`）；除非用户再次明确变更目标，不得推送到 `segsam3` 或其他 remote。
 - 不得修改 `core_projects/` 内的任何文件；将其视为外部只读依赖。
 - 不得修改、替换或禁用 SAM3 原始编码器及其几何编码逻辑；实验模型必须保持原始 SAM3 编码器行为。
+- 在 AutoDL 服务器执行测试时，必须从代码仓库根目录使用当前环境解释器运行 `python -m pytest`，不得直接调用可能丢失仓库导入路径的 `pytest` 入口脚本。
 
