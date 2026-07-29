@@ -49,9 +49,10 @@ within the client's upload scope. It does not change any task-loss definition.
 
 ## Strict 2x2 Comparison
 
-All four cells use `client_2:image_only` and `client_3:multimodal`, seed `3407`,
-the same data, round-global initialization, fresh optimizer lifecycle, learning
-rates, local epochs, task losses, public proxies, and FedAvg implementation.
+All four cells use `client_1:text_only`, `client_2:image_only`, and
+`client_3:multimodal`, seed `3407`, the same data, round-global initialization,
+fresh optimizer lifecycle, learning rates, local epochs, task losses, public
+proxies, and FedAvg implementation.
 
 | Cell | Restricted routing | FedProx | Config |
 |---|---:|---:|---|
@@ -67,18 +68,22 @@ Fixed local task losses:
 - `lambda_cream = 0.1`;
 - `mu = 0.01` only when FedProx is enabled.
 
-## Missing-Modality Ratio
+## Client Participation and Missing-Modality Ratios
 
-The ratio is defined at client level:
+The missing-modality ratio is defined at client level:
 
 `missing-modality ratio = clients without both image and text / all clients`
 
-The main 2x2 setting uses `image_only + multimodal`, giving `1/2`.
-The additional setting uses `text_only + image_only + multimodal`, giving `2/3`:
+The main 2x2 setting uses all three clients. Its client participation ratio is
+`3/3`, and its missing-modality ratio is `2/3`.
+
+The additional setting disables `client_1` and keeps `client_2 + client_3`.
+Relative to the declared three-client pool, its client participation ratio is
+`2/3`; among its enabled clients, its missing-modality ratio is `1/2`:
 
 `configs/fedsam3_ratio_2of3_r_fedprox.yaml`
 
-The realized ratio is derived from the enabled client list and stored in the protocol metadata.
+The enabled client list is the source of truth for both realized ratios.
 
 ## Parameter-Group Diagnostics
 
@@ -120,7 +125,8 @@ Each run records:
 
 - random seed;
 - full configuration and protocol hashes;
-- enabled clients and missing-modality ratio;
+- enabled clients and missing-modality ratio; the experiment manifest records
+  the declared client participation ratio;
 - Python, PyTorch, CUDA, device, and hostname;
 - Git commit;
 - per-round losses, resource use, conflict, and drift diagnostics.
