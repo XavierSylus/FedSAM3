@@ -4,15 +4,15 @@ federated:
   clients:
   - client_id: client_1
     modality: text_only
-    data_source: data/federated_split/client1_text_only/dataset.json
+    data_source: /autodl-fs/data/FedSAM3-Cream/datasets/federated_split/client1_text_only/dataset.json
     enabled: true
   - client_id: client_2
     modality: image_only
-    data_source: data/federated_split/client2_image_only/dataset.json
+    data_source: /autodl-fs/data/FedSAM3-Cream/datasets/federated_split/client2_image_only/dataset.json
     enabled: true
   - client_id: client_3
     modality: multimodal
-    data_source: data/federated_split/client3_multimodal/dataset.json
+    data_source: /autodl-fs/data/FedSAM3-Cream/datasets/federated_split/client3_multimodal/dataset.json
     enabled: true
   routing_mode: unrestricted
   client_init_policy: round_global
@@ -38,6 +38,7 @@ text_supervision:
   loss: prototype_logistic
   temperature: 0.07
 model:
+  sam3_checkpoint: /autodl-fs/data/FedSAM3-Cream/datasets/checkpoints/sam3.pt
   img_size: 256
   embed_dim: 768
   text_dim: 768
