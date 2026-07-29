@@ -65,6 +65,16 @@ def _load_json(path: Path) -> dict[str, Any]:
     return value
 
 
+def _canonical_json_value(value: Any) -> Any:
+    return json.loads(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+
+
 def _load_s4_contract(
     config_path: Path,
 ) -> tuple[FederatedConfig, dict[str, Any]]:
@@ -336,14 +346,15 @@ def _protocols_match(
     reverse = reverse_metadata.get("protocol_payload")
     if not isinstance(forward, dict) or not isinstance(reverse, dict):
         return False, {}
-    comparison = {
-        key: {
-            "forward": forward.get(key),
-            "reverse": reverse.get(key),
-            "equal": forward.get(key) == reverse.get(key),
+    comparison = {}
+    for key in PROTOCOL_COMPARISON_KEYS:
+        forward_value = _canonical_json_value(forward.get(key))
+        reverse_value = _canonical_json_value(reverse.get(key))
+        comparison[key] = {
+            "forward": forward_value,
+            "reverse": reverse_value,
+            "equal": forward_value == reverse_value,
         }
-        for key in PROTOCOL_COMPARISON_KEYS
-    }
     return all(item["equal"] for item in comparison.values()), comparison
 
 

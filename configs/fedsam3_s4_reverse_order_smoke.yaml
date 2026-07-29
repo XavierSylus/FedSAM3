@@ -74,7 +74,7 @@ options:
   verbose_sanity_check: false
 logging:
   log_type: tensorboard
-  log_dir: /autodl-fs/data/FedSAM3-Cream/experiments/logs/server_s4_reverse_order_smoke
+  log_dir: /autodl-fs/data/FedSAM3-Cream/experiments/logs/server_s4_reverse_order_smoke_rerun
   experiment_name: FedSAM3_S4_ReverseOrder_Smoke
   wandb_project: FedSAM3-Cream
   wandb_entity: null

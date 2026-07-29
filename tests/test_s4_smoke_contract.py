@@ -1,5 +1,7 @@
 import ast
+import json
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 import yaml
 
@@ -10,7 +12,7 @@ SCRIPT_PATH = PROJECT_ROOT / "scripts" / "server_s4_reverse_order_smoke.py"
 DATA_ROOT = "/autodl-fs/data/FedSAM3-Cream/datasets/federated_split"
 LOG_DIR = (
     "/autodl-fs/data/FedSAM3-Cream/experiments/logs/"
-    "server_s4_reverse_order_smoke"
+    "server_s4_reverse_order_smoke_rerun"
 )
 FORWARD_EVIDENCE_DIR = (
     "/autodl-fs/data/FedSAM3-Cream/experiments/logs/"
@@ -107,3 +109,28 @@ def test_s4_script_reorders_complete_client_state_and_audits_real_evidence():
     assert "--log_dir" not in source
     assert ".unlink(" not in source
     assert "shutil.rmtree" not in source
+
+
+def test_s4_protocol_comparison_canonicalizes_json_container_types():
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    module = ast.parse(source, filename=str(SCRIPT_PATH))
+    function = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_canonical_json_value"
+    )
+    namespace = {"Any": Any, "json": json}
+    exec(
+        compile(
+            ast.Module(body=[function], type_ignores=[]),
+            filename=str(SCRIPT_PATH),
+            mode="exec",
+        ),
+        namespace,
+    )
+    canonicalize = namespace["_canonical_json_value"]
+
+    from_yaml = {"thresholds": (0.5, 0.5, 0.5)}
+    from_json = {"thresholds": [0.5, 0.5, 0.5]}
+    assert canonicalize(from_yaml) == canonicalize(from_json)
