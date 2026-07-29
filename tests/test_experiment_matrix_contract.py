@@ -46,6 +46,7 @@ SERVER_ARTIFACT_CONFIGS = (
     "fedsam3_2x2_u_fedprox.yaml",
     "fedsam3_2x2_r_fedavg.yaml",
     "fedsam3_2x2_r_fedprox.yaml",
+    "fedsam3_ratio_2of3_r_fedprox.yaml",
 )
 S2_CONFIG_FILENAME = "fedsam3_s2_three_client_preflight.yaml"
 EXPECTED_S2_LOG_DIR = (
@@ -103,7 +104,7 @@ def test_server_storage_paths_are_explicit_and_isolated():
         assert config["logging"]["log_dir"] == expected_log_dir
 
 
-def test_main_matrix_configs_use_external_server_artifacts():
+def test_production_experiment_configs_use_external_server_artifacts():
     for filename in SERVER_ARTIFACT_CONFIGS:
         _assert_server_artifact_paths(_load_yaml(filename))
 
