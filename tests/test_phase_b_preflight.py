@@ -1,10 +1,14 @@
+import ast
 import importlib
 import sys
 import types
 from pathlib import Path
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+TRAINER_PATH = PROJECT_ROOT / "src" / "federated_trainer.py"
 DATA_ROOT = "/autodl-fs/data/FedSAM3-Cream/datasets/federated_split"
 SMOKE_LOG_DIR = (
     "/autodl-fs/data/FedSAM3-Cream/experiments/logs/tests/phase_b_smoke"
@@ -19,6 +23,22 @@ if str(PROJECT_ROOT) not in sys.path:
 def _drop_modules(*names: str) -> None:
     for name in names:
         sys.modules.pop(name, None)
+
+
+def _trainer_method_source(method_name: str) -> str:
+    source = TRAINER_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    trainer_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "FederatedTrainer"
+    )
+    method = next(
+        node
+        for node in trainer_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == method_name
+    )
+    return ast.get_source_segment(source, method)
 
 
 def test_importing_main_does_not_import_trainer():
@@ -113,3 +133,64 @@ def test_federated_trainer_uses_explicit_log_dir_on_direct_init():
 
     assert trainer.config.log_dir == DIRECT_LOG_DIR
     assert trainer.checkpoint_dir == Path(DIRECT_LOG_DIR) / "checkpoints"
+
+
+def test_validation_loader_failure_is_fatal(monkeypatch):
+    import src.federated_trainer as trainer_module
+
+    trainer = object.__new__(trainer_module.FederatedTrainer)
+    trainer.config = types.SimpleNamespace(
+        data_root=DATA_ROOT,
+        batch_size=1,
+        img_size=256,
+        max_samples=1,
+    )
+    trainer.client_configs = {
+        "client_2": {"modality": "image_only"},
+    }
+
+    def fail_loader(**kwargs):
+        raise FileNotFoundError("missing validation data")
+
+    monkeypatch.setattr(
+        trainer_module,
+        "create_heterogeneous_data_loaders",
+        fail_loader,
+    )
+
+    with pytest.raises(RuntimeError, match="client_2"):
+        trainer.setup_validation()
+
+
+def test_validation_metric_failure_is_fatal():
+    from src.federated_trainer import FederatedTrainer
+
+    class FailingTrainer:
+        def validate(self, **kwargs):
+            raise ValueError("invalid validation metric input")
+
+    trainer = object.__new__(FederatedTrainer)
+    trainer.client_trainers = {"client_2": FailingTrainer()}
+    trainer.global_model = object()
+    trainer.val_loader = object()
+    trainer.logger = None
+
+    with pytest.raises(RuntimeError, match="Validation failed"):
+        trainer._evaluate_validation(round_num=1)
+
+
+def test_required_checkpoint_failures_are_not_swallowed():
+    train_source = _trainer_method_source("train")
+    finalize_source = _trainer_method_source("_finalize_training")
+
+    assert "检查点保存失败" not in train_source
+    assert "best_model 保存失败" not in train_source
+    assert "最终检查点保存失败" not in finalize_source
+
+
+def test_final_validation_precedes_history_persistence():
+    finalize_source = _trainer_method_source("_finalize_training")
+
+    assert finalize_source.index(
+        "final_val_metrics = any_trainer.validate"
+    ) < finalize_source.index("with open(history_path")

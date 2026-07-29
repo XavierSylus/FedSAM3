@@ -1013,7 +1013,9 @@ class FederatedTrainer:
                 if cfg.get('modality') != 'text_only'
             ]
         if not val_client_ids:
-            print("  ⚠ 未能从 client_configs 中找到图像客户端，跳过验证集加载")
+            raise RuntimeError(
+                "Validation requires at least one enabled image-capable client"
+            )
 
         val_loaders = []
         for client_id in val_client_ids:
@@ -1039,8 +1041,10 @@ class FederatedTrainer:
                     if val_private is not None:
                         val_loaders.append(val_private)
             except Exception as e:
-                print(f"  警告: 无法加载验证集 ({client_id}): {e}")
-        
+                raise RuntimeError(
+                    f"Failed to load validation data for {client_id}"
+                ) from e
+
         # 合并所有验证集
         if val_loaders:
             val_datasets = [loader.dataset for loader in val_loaders]
@@ -1048,8 +1052,7 @@ class FederatedTrainer:
             self.val_loader = DataLoader(val_concat_dataset, batch_size=self.config.batch_size, shuffle=False)
             print(f"  [OK] 验证集准备完成，共 {len(val_concat_dataset)} 个样本")
         else:
-            self.val_loader = None
-            print("  ⚠ 未找到验证集数据，将跳过验证集评估")
+            raise RuntimeError("No validation dataset was loaded")
     
     def setup_logging(self):
         """初始化日志记录器"""
@@ -1116,15 +1119,12 @@ class FederatedTrainer:
                     _saved_best_dice = self.best_val_dice
                     _patience_counter = 0
                     # 保存最佳模型权重
-                    try:
-                        _best_model_path.parent.mkdir(parents=True, exist_ok=True)
-                        torch.save(
-                            self.global_model.state_dict(),
-                            _best_model_path
-                        )
-                        print(f"  [Best] 新最佳 Val Dice={_saved_best_dice:.4f}，已保存 best_model.pth")
-                    except Exception as _e:
-                        print(f"  [WARN] best_model 保存失败: {_e}")
+                    _best_model_path.parent.mkdir(parents=True, exist_ok=True)
+                    torch.save(
+                        self.global_model.state_dict(),
+                        _best_model_path
+                    )
+                    print(f"  [Best] 新最佳 Val Dice={_saved_best_dice:.4f}，已保存 best_model.pth")
                 else:
                     _patience_counter += 1
                     print(f"  [EarlyStopping] patience={_patience_counter}/{_EARLY_STOP_PATIENCE}，当前最佳 Dice={_saved_best_dice:.4f}")
@@ -1136,11 +1136,7 @@ class FederatedTrainer:
             # 检查点保存
             if self.config.checkpoint_interval > 0 and round_num % self.config.checkpoint_interval == 0:
                 print(f"\n  [检查点] 保存检查点（第 {round_num} 轮）...")
-                try:
-                    self.save_checkpoint(round_num)
-                except Exception as e:
-                    print(f"  [FAIL] 检查点保存失败: {e}")
-                    traceback.print_exc()
+                self.save_checkpoint(round_num)
 
             # 绘制训练曲线
             if round_num == 1 or round_num == self.config.rounds or round_num % _VAL_PLOT_INTERVAL == 0:
@@ -1959,9 +1955,7 @@ class FederatedTrainer:
             print(f"      HD95: {val_metrics['hd95']:.2f} pixel")
                 
         except Exception as e:
-            print(f"  ⚠ Validation failed: {e}")
-            import traceback
-            traceback.print_exc()
+            raise RuntimeError("Validation failed") from e
     
     def _resume_from_checkpoint(self) -> int:
         """从检查点恢复训练"""
@@ -2029,21 +2023,54 @@ class FederatedTrainer:
         print(f"\n最终模型已保存到: {save_path}")
         
         # 保存最终检查点
+        if not self.training_history['rounds']:
+            raise RuntimeError("Cannot finalize training without a completed round")
+        completed_round = int(self.training_history['rounds'][-1])
         print("\n保存最终检查点...")
-        try:
-            final_checkpoint_path = self.save_checkpoint(self.config.rounds)
-            print(f"最终检查点已保存到: {final_checkpoint_path}")
-        except Exception as e:
-            print(f"  [FAIL] 最终检查点保存失败: {e}")
-        
+        final_checkpoint_path = self.save_checkpoint(completed_round)
+        print(f"最终检查点已保存到: {final_checkpoint_path}")
+
+        # 最终验证集评估
+        if self.val_loader is None:
+            raise RuntimeError("Final validation requires a validation loader")
+        print("\n" + "=" * 60)
+        print("最终验证集评估")
+        print("=" * 60)
+        any_trainer = list(self.client_trainers.values())[0]
+        final_val_metrics = any_trainer.validate(
+            model=self.global_model,
+            test_loader=self.val_loader,
+            compute_hd95=True,
+            verbose=True
+        )
+
+        print(f"\n最终评估指标:")
+        print(f"  Dice 系数: {final_val_metrics.get('dice', 0.0):.4f}")
+        print(f"  IoU: {final_val_metrics.get('iou', 0.0):.4f}")
+        print(f"  HD95: {final_val_metrics['hd95']:.2f} pixel")
+
+        if self.config.save_masks:
+            print(f"\n保存分割掩码...")
+            mask_save_dir = self.checkpoint_dir / "segmentation_masks"
+            self.save_segmentation_masks(
+                self.global_model,
+                self.val_loader,
+                mask_save_dir,
+                self.config.max_masks
+            )
+            print(f"  [OK] 分割掩码已保存到: {mask_save_dir}")
+
+        self.training_history['final_val_metrics'] = final_val_metrics
+        print("=" * 60)
+
         # 保存训练历史记录
         history_path = self.checkpoint_dir / "training_history.json"
         self.training_history['final_stats'] = {
             'total_params': int(total_params),
             'trainable_params': int(trainable_params),
             'frozen_params': int(total_params - trainable_params),
-            'total_rounds': self.config.rounds,
-            'final_avg_loss': float(self.training_history['avg_losses'][-1]) if self.training_history['avg_losses'] else 0.0
+            'total_rounds': completed_round,
+            'final_avg_loss': float(self.training_history['avg_losses'][-1])
         }
         self.training_history['training_time'] = datetime.now().isoformat()
         self.training_history.setdefault('run_metadata', {})
@@ -2056,48 +2083,6 @@ class FederatedTrainer:
             json.dump(self.training_history.get('run_metadata', {}), f, indent=2, ensure_ascii=False)
         print(f"Run metadata saved to: {run_meta_path}")
         print(f"训练历史已保存到: {history_path}")
-        
-        # 最终验证集评估
-        if self.val_loader is not None:
-            print("\n" + "=" * 60)
-            print("最终验证集评估")
-            print("=" * 60)
-            try:
-                any_trainer = list(self.client_trainers.values())[0]
-                final_val_metrics = any_trainer.validate(
-                    model=self.global_model,
-                    test_loader=self.val_loader,
-                    compute_hd95=True,
-                    verbose=True
-                )
-                
-                print(f"\n最终评估指标:")
-                print(f"  Dice 系数: {final_val_metrics.get('dice', 0.0):.4f}")
-                print(f"  IoU: {final_val_metrics.get('iou', 0.0):.4f}")
-                print(f"  HD95: {final_val_metrics['hd95']:.2f} pixel")
-                
-                # 保存分割掩码
-                if self.config.save_masks:
-                    print(f"\n保存分割掩码...")
-                    mask_save_dir = self.checkpoint_dir / "segmentation_masks"
-                    try:
-                        self.save_segmentation_masks(
-                            self.global_model,
-                            self.val_loader,
-                            mask_save_dir,
-                            self.config.max_masks
-                        )
-                        print(f"  [OK] 分割掩码已保存到: {mask_save_dir}")
-                    except Exception as e:
-                        print(f"  [FAIL] 保存分割掩码失败: {e}")
-                
-                self.training_history['final_val_metrics'] = final_val_metrics
-                
-            except Exception as e:
-                print(f"最终验证集评估失败: {e}")
-                import traceback
-                traceback.print_exc()
-            print("=" * 60)
         
         # 记录最终总结到日志系统
         if self.logger is not None:
