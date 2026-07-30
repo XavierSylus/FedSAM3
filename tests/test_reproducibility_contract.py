@@ -1,12 +1,16 @@
 import hashlib
+import types
+from pathlib import Path
 
 import pytest
 import torch
 from torch.utils.data import DataLoader, Dataset
 
+import data.heterogeneous_dataset_loader as loader_module
 from data.heterogeneous_dataset_loader import (
     HeterogeneousBraTSDataset,
     configure_loader_randomness,
+    heterogeneous_collate_fn,
 )
 from src.config_manager import FederatedConfig
 from src.federated_trainer import FederatedTrainer
@@ -145,6 +149,46 @@ def test_image_loader_records_a_dedicated_slice_generator():
     assert dataset._slice_generator is not None
     assert state["slice_seed"] == 53
     assert len(state["slice_generator_state_sha256"]) == 64
+
+
+def test_validation_metadata_preserves_nifti_geometry(monkeypatch):
+    fake_nifti = types.SimpleNamespace(
+        shape=(240, 240, 155),
+        header=types.SimpleNamespace(get_zooms=lambda: (1.0, 1.0, 1.2)),
+    )
+    monkeypatch.setattr(loader_module, "HAS_NIBABEL", True)
+    monkeypatch.setattr(
+        loader_module,
+        "nib",
+        types.SimpleNamespace(load=lambda _: fake_nifti),
+        raising=False,
+    )
+
+    dataset = object.__new__(HeterogeneousBraTSDataset)
+    dataset._validation_metadata_cache = {}
+    dataset._find_first_file = lambda *_: "/dataset/BraTSCase/BraTSCase_seg.nii.gz"
+    case_folder = Path("/dataset/BraTSCase")
+
+    first = dataset._get_validation_metadata(case_folder, 7)
+    second = dataset._get_validation_metadata(case_folder, 8)
+    images = torch.zeros(2, 3, 4)
+    masks = torch.zeros(3, 4, 5)
+    _, _, metadata = heterogeneous_collate_fn(
+        [(images, masks, first), (images, masks, second)],
+        "image_only",
+    )
+
+    assert metadata["case_id"] == ["BraTSCase", "BraTSCase"]
+    assert metadata["slice_index"].tolist() == [7, 8]
+    assert metadata["volume_shape"].tolist() == [
+        [240, 240, 155],
+        [240, 240, 155],
+    ]
+    assert metadata["voxel_spacing_mm"].tolist() == [
+        [1.0, 1.0, 1.2],
+        [1.0, 1.0, 1.2],
+    ]
+    assert metadata["case_key"][0] == metadata["case_key"][1]
 
 
 def test_data_manifest_and_stream_seeds_are_recorded(tmp_path):
