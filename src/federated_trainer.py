@@ -1839,7 +1839,7 @@ class FederatedTrainer:
                 val_hd95 = self.last_val_metrics['hd95']
                 log_metrics['Val_Dice'] = val_dice
                 log_metrics['Val_IoU'] = val_iou
-                log_metrics['Val_HD95_Pixel'] = val_hd95
+                log_metrics['Val_HD95_MM'] = val_hd95
             self.logger.log(log_metrics, step=round_num)
         
         # 记录训练历史
@@ -1909,7 +1909,7 @@ class FederatedTrainer:
             )
             
             print(f"  Dice: {val_metrics.get('dice', 0):.4f}, IoU: {val_metrics.get('iou', 0):.4f}")
-            print(f"  HD95: {val_metrics['hd95']:.2f} pixel")
+            print(f"  HD95: {val_metrics['hd95']:.2f} mm")
             
             # 记录验证指标到日志系统
             if self.logger is not None:
@@ -1918,12 +1918,12 @@ class FederatedTrainer:
                 log_metrics = {
                     'Val_Dice': val_dice,
                     'Val_IoU': val_iou,
-                    'Val_HD95_Pixel': val_metrics['hd95'],
+                    'Val_HD95_MM': val_metrics['hd95'],
                 }
                 for region in ("WT", "TC", "ET"):
                     log_metrics[f'Val_{region}_Dice'] = val_metrics[f'{region}_dice']
                     log_metrics[f'Val_{region}_IoU'] = val_metrics[f'{region}_iou']
-                    log_metrics[f'Val_{region}_HD95_Pixel'] = val_metrics[f'{region}_hd95']
+                    log_metrics[f'Val_{region}_HD95_MM'] = val_metrics[f'{region}_hd95']
                     log_metrics[f'Val_{region}_Empty_FP_Rate'] = val_metrics[
                         f'{region}_empty_fp_rate'
                     ]
@@ -1952,7 +1952,7 @@ class FederatedTrainer:
             print(f"\n    Validation Metrics:")
             print(f"      Dice: {val_metrics.get('dice', 0.0):.4f}")
             print(f"      IoU: {val_metrics.get('iou', 0.0):.4f}")
-            print(f"      HD95: {val_metrics['hd95']:.2f} pixel")
+            print(f"      HD95: {val_metrics['hd95']:.2f} mm")
                 
         except Exception as e:
             raise RuntimeError("Validation failed") from e
@@ -2047,7 +2047,7 @@ class FederatedTrainer:
         print(f"\n最终评估指标:")
         print(f"  Dice 系数: {final_val_metrics.get('dice', 0.0):.4f}")
         print(f"  IoU: {final_val_metrics.get('iou', 0.0):.4f}")
-        print(f"  HD95: {final_val_metrics['hd95']:.2f} pixel")
+        print(f"  HD95: {final_val_metrics['hd95']:.2f} mm")
 
         if self.config.save_masks:
             print(f"\n保存分割掩码...")
@@ -2100,7 +2100,7 @@ class FederatedTrainer:
             if 'final_val_metrics' in self.training_history:
                 final_metrics = self.training_history['final_val_metrics']
                 summary['final_val_dice'] = final_metrics.get('dice', 0.0)
-                summary['final_val_hd95_pixel'] = final_metrics['hd95']
+                summary['final_val_hd95_mm'] = final_metrics['hd95']
             self.logger.log_summary(summary)
             self.logger.close()
         
@@ -2234,7 +2234,7 @@ class FederatedTrainer:
                     )
                     plt.title(f'Validation Metric: HD95 (Round {current_round})', fontsize=14, fontweight='bold')
                     plt.xlabel('Round', fontsize=12)
-                    plt.ylabel('HD95 (pixel)', fontsize=12)
+                    plt.ylabel('HD95 (mm)', fontsize=12)
                     plt.legend(loc='best', fontsize=10)
                     plt.grid(True, alpha=0.3)
                     plt.tight_layout()

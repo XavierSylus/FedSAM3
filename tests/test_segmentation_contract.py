@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,11 @@ import torch.nn.functional as F
 
 from src.config_manager import FederatedConfig
 from src.cream_losses import BraTSDiceBCELoss
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CLIENT_PATH = PROJECT_ROOT / "src" / "client.py"
+TRAINER_PATH = PROJECT_ROOT / "src" / "federated_trainer.py"
 
 
 def _nested_target() -> torch.Tensor:
@@ -259,3 +265,19 @@ federated:
     assert config.seg_bce_weight == 1.0
     assert config.seg_dice_smooth == 1.0
     assert config.segmentation_thresholds == (0.5, 0.6, 0.7)
+
+
+def test_validation_reports_casewise_3d_hd95_in_mm():
+    client_source = CLIENT_PATH.read_text(encoding="utf-8")
+    trainer_source = TRAINER_PATH.read_text(encoding="utf-8")
+
+    ast.parse(client_source, filename=str(CLIENT_PATH))
+    ast.parse(trainer_source, filename=str(TRAINER_PATH))
+    assert "BraTS3DHD95Accumulator" in client_source
+    assert "compute_hd95=False" in client_source
+    assert "volume_accumulator.update_from_logits" in client_source
+    assert "results.update(volume_accumulator.compute())" in client_source
+    assert "Val_HD95_Pixel" not in trainer_source
+    assert "Val_HD95_MM" in trainer_source
+    assert "final_val_hd95_mm" in trainer_source
+    assert "HD95 (mm)" in trainer_source
