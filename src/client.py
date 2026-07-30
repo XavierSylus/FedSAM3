@@ -1145,23 +1145,32 @@ class BaseClientTrainer(ABC):
         test_loader: DataLoader,
         compute_hd95: bool = True,
         verbose: bool = False
-    ) -> Dict[str, float]:
-        """Evaluate 2D validation samples under the strict WT/TC/ET contract."""
+    ) -> Dict[str, Any]:
+        """Evaluate 2D overlap and casewise physical 3D HD95."""
         model.eval()
         if self.segmentation_thresholds is None:
             raise RuntimeError("segmentation inference thresholds were not configured")
         metrics_module = self._get_metrics_module()
         accumulator = metrics_module.BraTSMetricAccumulator(
-            compute_hd95=compute_hd95
+            compute_hd95=False
+        )
+        volume_accumulator = (
+            metrics_module.BraTS3DHD95Accumulator()
+            if compute_hd95
+            else None
         )
 
         with torch.no_grad():
             for batch_idx, batch in enumerate(test_loader):
+                metadata = None
                 if isinstance(batch, (list, tuple)):
                     images, masks = batch[0], batch[1] if len(batch) > 1 else None
+                    if len(batch) > 2 and isinstance(batch[2], dict):
+                        metadata = batch[2]
                 elif isinstance(batch, dict):
                     images = batch.get('images', batch.get('inp'))
                     masks = batch.get('masks', batch.get('gt', batch.get('target')))
+                    metadata = batch.get('metadata')
                 else:
                     images, masks = batch, None
 
@@ -1190,6 +1199,17 @@ class BaseClientTrainer(ABC):
                     masks,
                     thresholds=self.segmentation_thresholds,
                 )
+                if volume_accumulator is not None:
+                    if metadata is None:
+                        raise RuntimeError(
+                            "3D HD95 requires NIfTI validation metadata"
+                        )
+                    volume_accumulator.update_from_logits(
+                        pred_logits,
+                        masks,
+                        thresholds=self.segmentation_thresholds,
+                        metadata=metadata,
+                    )
 
                 if batch_idx == 0:
                     for channel_index, region in enumerate(("WT", "TC", "ET")):
@@ -1213,6 +1233,8 @@ class BaseClientTrainer(ABC):
                     self.logger.info("Validation batch %d accumulated", batch_idx)
 
         results = accumulator.compute()
+        if volume_accumulator is not None:
+            results.update(volume_accumulator.compute())
         print(
             "  [Val Stat] "
             f"pred_fg_voxels={results['pred_fg_voxels']} "
@@ -1221,7 +1243,7 @@ class BaseClientTrainer(ABC):
             f"recall={results['recall']:.4f}"
         )
         for region in ("WT", "TC", "ET"):
-            print(
+            summary = (
                 f"  [Val {region}] "
                 f"Dice={results[f'{region}_dice']:.4f} "
                 f"IoU={results[f'{region}_iou']:.4f} "
@@ -1229,6 +1251,12 @@ class BaseClientTrainer(ABC):
                 f"empty_fp={results[f'{region}_empty_fp_count']} "
                 f"empty_fn={results[f'{region}_empty_fn_count']}"
             )
+            if volume_accumulator is not None:
+                summary += (
+                    f" HD95={results[f'{region}_hd95']:.2f}mm "
+                    f"cases={results[f'{region}_case_count']}"
+                )
+            print(summary)
         return results
 
 
