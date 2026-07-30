@@ -1,3 +1,4 @@
+import ast
 import json
 from pathlib import Path, PurePosixPath
 
@@ -6,6 +7,7 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = PROJECT_ROOT / "configs" / "fedsam3_experiment_manifest.json"
+TRAINER_PATH = PROJECT_ROOT / "src" / "federated_trainer.py"
 
 MATRIX_EXPECTATIONS = {
     "fedsam3_2x2_u_fedavg.yaml": ("unrestricted", "include_zero", "none", 0.0),
@@ -192,6 +194,43 @@ def test_main_matrix_exposes_only_routing_and_fedprox_variables():
             "system",
         ):
             assert config[key] == first[key]
+
+
+def test_early_stopping_is_configurable_and_guards_training_break(tmp_path):
+    from src.config_manager import FederatedConfig
+
+    config = _load_yaml("fedsam3_2x2_u_fedavg.yaml")
+    config["validation"]["early_stopping_enabled"] = False
+    config["validation"]["early_stopping_patience"] = 17
+    config_path = tmp_path / "early_stopping_disabled.yaml"
+    config_path.write_text(
+        yaml.safe_dump(config, sort_keys=False),
+        encoding="utf-8",
+    )
+    runtime_config = FederatedConfig.from_yaml(str(config_path))
+
+    assert runtime_config.early_stopping_enabled is False
+    assert runtime_config.early_stopping_patience == 17
+
+    trainer_source = TRAINER_PATH.read_text(encoding="utf-8")
+    trainer_tree = ast.parse(trainer_source)
+    train_method = next(
+        node
+        for class_node in trainer_tree.body
+        if isinstance(class_node, ast.ClassDef)
+        for node in class_node.body
+        if isinstance(node, ast.FunctionDef) and node.name == "train"
+    )
+    early_stopping_guard = next(
+        node
+        for node in ast.walk(train_method)
+        if isinstance(node, ast.If)
+        and ast.unparse(node.test) == "self.config.early_stopping_enabled"
+    )
+
+    assert "_EARLY_STOP_PATIENCE" not in trainer_source
+    assert any(isinstance(node, ast.Break) for node in ast.walk(early_stopping_guard))
+    assert "self.config.early_stopping_patience" in ast.unparse(early_stopping_guard)
 
 
 def test_manifest_matches_main_matrix_and_has_no_legacy_routing_flag():

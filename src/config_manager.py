@@ -209,6 +209,12 @@ class FederatedConfig:
     # ==================== 验证与评估 ====================
     val_interval: int = 5
     """验证间隔（每隔多少轮进行一次验证）"""
+
+    early_stopping_enabled: bool = True
+    """是否启用基于验证 Dice 的早停"""
+
+    early_stopping_patience: int = 20
+    """早停前允许验证指标连续无提升的次数"""
     
     save_masks: bool = False
     """是否保存分割掩码图像"""
@@ -264,6 +270,17 @@ class FederatedConfig:
             )
         if self.local_epochs <= 0:
             raise ValueError(f"local_epochs 必须大于 0，当前值: {self.local_epochs}")
+        if not isinstance(self.early_stopping_enabled, bool):
+            raise ValueError("early_stopping_enabled 必须为布尔值")
+        if (
+            isinstance(self.early_stopping_patience, bool)
+            or not isinstance(self.early_stopping_patience, int)
+            or self.early_stopping_patience <= 0
+        ):
+            raise ValueError(
+                "early_stopping_patience 必须为正整数，"
+                f"当前值: {self.early_stopping_patience}"
+            )
         if self.lambda_cream < 0:
             raise ValueError(f"lambda_cream 不能为负数，当前值: {self.lambda_cream}")
         text_loss_values = (self.text_loss_name, self.text_loss_temperature)
@@ -679,6 +696,12 @@ class FederatedConfig:
         if 'validation' in config_dict:
             validation = config_dict['validation']
             flattened['val_interval'] = validation.get('val_interval', 5)
+            flattened['early_stopping_enabled'] = validation.get(
+                'early_stopping_enabled', True
+            )
+            flattened['early_stopping_patience'] = validation.get(
+                'early_stopping_patience', 20
+            )
             flattened['save_masks'] = validation.get('save_masks', False)
             flattened['max_masks'] = validation.get('max_masks', 50)
 
