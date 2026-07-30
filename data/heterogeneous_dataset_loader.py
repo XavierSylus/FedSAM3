@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset, RandomSampler
+from torch.utils.data import DataLoader, Dataset, RandomSampler, default_collate
 
 from data_processing.brats_region_contract import brats_labels_to_regions
 
@@ -45,6 +45,7 @@ class HeterogeneousBraTSDataset(Dataset):
         self._slice_generator = slice_generator
         self.samples: Optional[List[Tuple[int, int]]] = None
         self._all_zero_mask_warned_cases: set[str] = set()
+        self._validation_metadata_cache: Dict[str, Dict[str, Any]] = {}
 
         self.case_dir = self.data_dir / ("private" if mode == "private" else "public")
         if not self.case_dir.exists():
@@ -129,7 +130,7 @@ class HeterogeneousBraTSDataset(Dataset):
         - multimodal:
             - training private: (image, mask, text_feature)
             - training public:  (image, text_feature)
-            - validation:       (image, mask)
+            - validation:       (image, mask, volume_metadata)
         """
         if self.client_type == "text_only":
             text_path = self.text_files[idx]
@@ -161,6 +162,15 @@ class HeterogeneousBraTSDataset(Dataset):
         mask = None
         if self.load_mask and self.client_type in {"image_only", "multimodal"}:
             mask = self._load_mask(case_folder, slice_idx=slice_idx)
+
+        if self.is_validation and mask is not None:
+            if slice_idx is None:
+                raise RuntimeError("validation sample is missing its slice index")
+            return (
+                image,
+                mask,
+                self._get_validation_metadata(case_folder, slice_idx),
+            )
 
         if self.client_type == "image_only":
             if mask is not None:
@@ -312,9 +322,79 @@ class HeterogeneousBraTSDataset(Dataset):
 
         return brats_labels_to_regions(mask)
 
+    def _get_validation_metadata(
+        self,
+        case_folder: Path,
+        slice_idx: int,
+    ) -> Dict[str, Any]:
+        if not HAS_NIBABEL:
+            raise ImportError("nibabel is required for validation metadata")
+        case_key = str(case_folder.resolve())
+        if case_key not in self._validation_metadata_cache:
+            mask_file = self._find_first_file(
+                case_folder,
+                ["*_seg.nii", "*_seg.nii.gz"],
+            )
+            if mask_file is None:
+                raise FileNotFoundError(
+                    f"No segmentation mask found in {case_folder}"
+                )
+            mask_nifti = nib.load(mask_file)
+            volume_shape = tuple(int(size) for size in mask_nifti.shape)
+            voxel_spacing = tuple(
+                float(value)
+                for value in mask_nifti.header.get_zooms()
+            )
+            if len(volume_shape) != 3 or any(size <= 1 for size in volume_shape):
+                raise ValueError(
+                    f"Invalid NIfTI volume shape for {case_folder.name}: "
+                    f"{volume_shape}"
+                )
+            if len(voxel_spacing) < 3 or any(
+                not np.isfinite(value) or value <= 0.0
+                for value in voxel_spacing[:3]
+            ):
+                raise ValueError(
+                    f"Invalid NIfTI spacing for {case_folder.name}: "
+                    f"{voxel_spacing}"
+                )
+            self._validation_metadata_cache[case_key] = {
+                "case_key": case_key,
+                "case_id": case_folder.name,
+                "volume_shape": torch.tensor(
+                    volume_shape,
+                    dtype=torch.int64,
+                ),
+                "voxel_spacing_mm": torch.tensor(
+                    voxel_spacing[:3],
+                    dtype=torch.float64,
+                ),
+            }
+
+        metadata = self._validation_metadata_cache[case_key]
+        return {
+            **metadata,
+            "slice_index": torch.tensor(slice_idx, dtype=torch.int64),
+        }
+
 
 def heterogeneous_collate_fn(batch, client_type: str):
     """Collate heterogeneous client batches into the expected tuple shapes."""
+    if (
+        isinstance(batch[0], (list, tuple))
+        and len(batch[0]) == 3
+        and isinstance(batch[0][2], dict)
+    ):
+        if any(
+            len(item) != 3 or not isinstance(item[2], dict)
+            for item in batch
+        ):
+            raise ValueError("validation metadata must be present for every item")
+        images = torch.stack([item[0] for item in batch], dim=0)
+        masks = torch.stack([item[1] for item in batch], dim=0)
+        metadata = default_collate([item[2] for item in batch])
+        return images, masks, metadata
+
     if client_type == "text_only":
         text_features = [item[0] for item in batch]
         return (torch.stack(text_features, dim=0),)
