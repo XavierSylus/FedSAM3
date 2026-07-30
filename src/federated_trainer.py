@@ -39,7 +39,6 @@ if str(project_root) not in sys.path:
 _BRATS_NUM_CLASSES   = 3      # BraTS 肿瘤子区域（WT/TC/ET）
 _BERT_TEXT_DIM       = 768    # BERT-base 输出维度
 _CONTRASTIVE_DIM     = 1024   # 对比学习嵌入空间维度
-_EARLY_STOP_PATIENCE = 20     # Early Stopping 耐心轮数
 _VAL_PLOT_INTERVAL   = 5      # 验证集评估 & 绘图间隔（轮）
 
 from src.config_manager import FederatedConfig
@@ -1125,11 +1124,12 @@ class FederatedTrainer:
                         _best_model_path
                     )
                     print(f"  [Best] 新最佳 Val Dice={_saved_best_dice:.4f}，已保存 best_model.pth")
-                else:
+                elif self.config.early_stopping_enabled:
                     _patience_counter += 1
-                    print(f"  [EarlyStopping] patience={_patience_counter}/{_EARLY_STOP_PATIENCE}，当前最佳 Dice={_saved_best_dice:.4f}")
-                    if _patience_counter >= _EARLY_STOP_PATIENCE:
-                        print(f"\n🚨 [Early Stopping] 触发！连续 {_EARLY_STOP_PATIENCE} 次验证无提升，停止训练。")
+                    patience = self.config.early_stopping_patience
+                    print(f"  [EarlyStopping] patience={_patience_counter}/{patience}，当前最佳 Dice={_saved_best_dice:.4f}")
+                    if _patience_counter >= patience:
+                        print(f"\n[Early Stopping] 触发！连续 {patience} 次验证无提升，停止训练。")
                         print(f"   最佳 Val Dice = {_saved_best_dice:.4f}（已保存至 {_best_model_path}）")
                         break
 
