@@ -233,6 +233,15 @@ def test_early_stopping_is_configurable_and_guards_training_break(tmp_path):
     assert "self.config.early_stopping_patience" in ast.unparse(early_stopping_guard)
 
 
+def test_main_matrix_declares_fixed_60_round_training():
+    for filename in MATRIX_EXPECTATIONS:
+        config = _load_yaml(filename)
+
+        assert config["training"]["rounds"] == 60
+        assert config["validation"]["early_stopping_enabled"] is False
+        assert config["validation"]["early_stopping_patience"] == 20
+
+
 def test_manifest_matches_main_matrix_and_has_no_legacy_routing_flag():
     manifest_text = MANIFEST_PATH.read_text(encoding="utf-8")
     manifest = json.loads(manifest_text)
