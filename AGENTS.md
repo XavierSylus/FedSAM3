@@ -10,7 +10,7 @@
 - 判断本机是否具备 PyTorch、CUDA 或其他运行环境时，必须检查全部相关 Conda/虚拟环境和硬件状态，不得仅依据默认 Python 环境下结论。
 - 未经用户明确要求，不得在本地启动训练；用户要求项目审查时仅执行只读检查，并将实际训练与 smoke run 留在目标服务器。
 - 仓库内的 `data/` 是 Python 数据加载源码包，迁移外部数据集或训练结果时不得删除或移动该源码包。
-- 服务器训练与验证必须由所选 YAML 的 `data_root` 指向 `/autodl-fs/data/FedSAM3-Cream/datasets/federated_split`，并由 `logging.log_dir` 指向 `/autodl-fs/data/FedSAM3-Cream/experiments/logs` 下对应实验目录；不得在脚本或命令中硬编码或临时覆盖这些路径。
+- 服务器训练与验证必须由所选 YAML 的 `data_root` 指向 `/autodl-fs/data/FedSAM3-Cream/datasets/federated_split`，并由 `logging.log_dir` 指向系统盘 `/root/autodl-tmp/FedSAM3-Cream/experiments/logs` 下对应实验目录；不得在脚本或命令中硬编码或临时覆盖这些路径。原始数据集与 SAM3 权重继续保留在 `/autodl-fs`，只迁移实验输出、日志、CSV 与 checkpoint。
 - 用户要求审查是否成熟可推送服务器训练时，本地不得执行训练、smoke run 或模型前向/反向验证；只能进行静态代码、配置、测试定义、Git 状态和提交差异审查。
 - 用户提供的会议或投稿信息仅作为对标参考；未经明确要求，不得写入项目文件名、配置、日志、文档或项目叙事，也不得表述为投稿目标。
 - 设计或修改联邦对照实验前，必须先书面固定逐参数 U/R 聚合及零更新权重规则、文本与分割损失、空区域指标、BraTS 标签双向唯一转换、named parameter/buffer 边界、参数组真实梯度与上传聚合有效性、FedAvg 样本单位，以及数据顺序、随机状态、优化器、调度器、客户端顺序和确定性配置；未完成这些契约不得开始实现或训练。
