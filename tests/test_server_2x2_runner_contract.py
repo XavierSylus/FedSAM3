@@ -2,7 +2,11 @@ import ast
 import json
 from pathlib import Path
 
+import pytest
 import yaml
+
+from scripts import server_run_2x2_matrix as matrix_runner
+from scripts import server_verify_formal_cell as formal_verifier
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -74,3 +78,119 @@ def test_formal_matrix_runner_persists_and_audits_submission_evidence():
         "shutil.rmtree",
     ):
         assert forbidden_text not in source
+
+
+def test_formal_matrix_runner_can_select_exactly_one_declared_cell():
+    cells = [{"cell": cell} for cell in EXPECTED_CELLS]
+
+    selected = matrix_runner._select_cells(cells, "R-FedProx")
+
+    assert [cell["cell"] for cell in selected] == ["R-FedProx"]
+    with pytest.raises(ValueError, match="Unknown formal cell"):
+        matrix_runner._select_cells(cells, "not-a-cell")
+
+
+def test_formal_verifier_rejects_incomplete_round_sequence():
+    with pytest.raises(ValueError, match="exact rounds 1..60"):
+        formal_verifier.require_exact_rounds(
+            "training_history.rounds",
+            list(range(1, 60)),
+            expected_rounds=60,
+        )
+
+
+def test_formal_verifier_rejects_duplicate_diagnostic_csv():
+    diagnostics = {
+        "client_drift": {
+            "client_1": {
+                "TEXT_PARAMS": {
+                    "update_l2": 1.0,
+                    "reference_l2": 2.0,
+                }
+            }
+        },
+        "pairwise_conflicts": [],
+        "conflict_summary": {},
+        "global_drift": {},
+    }
+    expected_rows = formal_verifier.serialized_diagnostic_rows(
+        [1],
+        [diagnostics],
+    )
+
+    with pytest.raises(ValueError, match="diagnostic CSV does not exactly match"):
+        formal_verifier.assert_diagnostic_export_records(
+            rounds=[1],
+            diagnostics=[diagnostics],
+            jsonl_records=[{"round": 1, **diagnostics}],
+            csv_fieldnames=formal_verifier.DIAGNOSTIC_FIELDNAMES,
+            csv_rows=expected_rows + expected_rows,
+        )
+
+
+def test_formal_verifier_uses_the_training_validation_contract():
+    verifier_path = PROJECT_ROOT / "scripts" / "server_verify_formal_cell.py"
+    source = verifier_path.read_text(encoding="utf-8")
+    ast.parse(source, filename=str(verifier_path))
+
+    for required_text in (
+        "final_model.pth",
+        "checkpoint_round_60.pth",
+        "latest_checkpoint.pth",
+        "FederatedTrainer",
+        "setup_environment",
+        "setup_clients",
+        "setup_validation",
+        "compute_hd95=True",
+        '"hd95_unit": "mm"',
+        '"hd95_dimension": "3d_case"',
+        "formal_verification.json",
+        "final_metrics.csv",
+        "round_metrics.csv",
+    ):
+        assert required_text in source
+
+    for forbidden_text in (
+        "evaluate_model",
+        "best_model.pth",
+        "--data_root",
+        "--log_dir",
+    ):
+        assert forbidden_text not in source
+
+
+def test_round_metrics_csv_has_one_row_per_validation_round():
+    metric = {
+        "dice": 0.7,
+        "iou": 0.6,
+        "hd95": 20.0,
+        "WT_dice": 0.71,
+        "TC_dice": 0.70,
+        "ET_dice": 0.69,
+        "WT_iou": 0.61,
+        "TC_iou": 0.60,
+        "ET_iou": 0.59,
+        "WT_hd95": 19.0,
+        "TC_hd95": 20.0,
+        "ET_hd95": 21.0,
+        "num_cases": 32,
+    }
+    history = {
+        "rounds": [1, 2],
+        "avg_losses": [0.9, 0.8],
+        "avg_seg_losses": [0.8, 0.7],
+        "avg_cream_losses": [0.1, 0.1],
+        "lr_history": [1e-4, 9e-5],
+        "gpu_mem_mb": [1000, 1000],
+        "round_time_sec": [10, 11],
+        "grad_conflict_deg": [90.0, 89.0],
+        "val_metrics": [
+            {"round": 1, **metric},
+            {"round": 2, **metric},
+        ],
+    }
+
+    rows = formal_verifier._build_round_metric_rows(history)
+
+    assert [row["round"] for row in rows] == [1, 2]
+    assert [row["hd95_mm"] for row in rows] == [20.0, 20.0]
