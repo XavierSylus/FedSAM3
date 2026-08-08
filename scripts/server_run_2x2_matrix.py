@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import importlib.metadata
 import json
@@ -62,6 +63,7 @@ def _sha256(path: Path) -> str:
 def _log(handle: TextIO, message: str) -> None:
     handle.write(f"[{_now()}] {message}\n")
     handle.flush()
+    print(message, flush=True)
 
 
 def _git_output(*arguments: str) -> str:
@@ -192,6 +194,18 @@ def _matrix_definition() -> tuple[list[dict[str, Any]], Path]:
     return cells, matrix_root
 
 
+def _select_cells(
+    cells: list[dict[str, Any]],
+    selected_cell: str | None,
+) -> list[dict[str, Any]]:
+    if selected_cell is None:
+        return cells
+    selected = [cell for cell in cells if cell["cell"] == selected_cell]
+    if len(selected) != 1:
+        raise ValueError(f"Unknown formal cell: {selected_cell}")
+    return selected
+
+
 def _require_empty_outputs(cells: list[dict[str, Any]]) -> None:
     for cell in cells:
         log_dir = cell["log_dir"]
@@ -239,15 +253,45 @@ def _copy_inputs(
     return records
 
 
-def _run_command(command: list[str], log_handle: TextIO) -> None:
+def _run_command(
+    command: list[str],
+    log_handle: TextIO,
+    output_path: Path | None = None,
+) -> None:
     _log(log_handle, f"COMMAND: {json.dumps(command, ensure_ascii=False)}")
-    subprocess.run(
-        command,
-        cwd=PROJECT_ROOT,
-        stdout=log_handle,
-        stderr=subprocess.STDOUT,
-        check=True,
-    )
+    if output_path is None:
+        subprocess.run(
+            command,
+            cwd=PROJECT_ROOT,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            check=True,
+        )
+        return
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8", buffering=1) as output_handle:
+        process = subprocess.Popen(
+            command,
+            cwd=PROJECT_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+        if process.stdout is None:
+            raise RuntimeError(f"Failed to capture command output: {command}")
+        for line in process.stdout:
+            log_handle.write(line)
+            log_handle.flush()
+            output_handle.write(line)
+            sys.stdout.write(line)
+            sys.stdout.flush()
+        return_code = process.wait()
+    if return_code != 0:
+        raise subprocess.CalledProcessError(return_code, command)
 
 
 def _audit_cell(
@@ -255,11 +299,24 @@ def _audit_cell(
     git_commit: str,
 ) -> dict[str, Any]:
     checkpoint_dir = cell["log_dir"] / "checkpoints"
+    verification_dir = cell["log_dir"] / "formal_verification"
     artifact_paths = {
+        "preflight_log": cell["log_dir"] / "preflight.log",
+        "console_log": cell["log_dir"] / "console.log",
+        "verification_console": cell["log_dir"] / "verification_console.log",
+        "diagnostic_csv": cell["log_dir"] / "parameter_group_diagnostics.csv",
+        "diagnostic_jsonl": cell["log_dir"] / "parameter_group_diagnostics.jsonl",
+        "effectiveness_jsonl": (
+            cell["log_dir"] / "parameter_group_effectiveness.jsonl"
+        ),
         "final_model": checkpoint_dir / "final_model.pth",
         "latest_checkpoint": checkpoint_dir / "latest_checkpoint.pth",
+        "round_60_checkpoint": checkpoint_dir / "checkpoint_round_60.pth",
         "training_history": checkpoint_dir / "training_history.json",
         "run_metadata": checkpoint_dir / "run_metadata.json",
+        "formal_verification": verification_dir / "formal_verification.json",
+        "final_metrics_csv": verification_dir / "final_metrics.csv",
+        "round_metrics_csv": verification_dir / "round_metrics.csv",
     }
     for name, path in artifact_paths.items():
         if not path.is_file() or path.stat().st_size <= 0:
@@ -269,12 +326,23 @@ def _audit_cell(
     metadata = _read_json(artifact_paths["run_metadata"])
     rounds = history.get("rounds")
     final_metrics = history.get("final_val_metrics")
-    if not isinstance(rounds, list) or not rounds:
-        raise ValueError(f"Training history has no completed round: {cell['cell']}")
+    if rounds != list(range(1, 61)):
+        raise ValueError(
+            f"Training history must contain exact rounds 1..60: {cell['cell']}"
+        )
     if not isinstance(final_metrics, dict):
         raise ValueError(f"Training history has no final metrics: {cell['cell']}")
     if metadata.get("git_commit") != git_commit:
         raise ValueError(f"Run metadata Git commit mismatch: {cell['cell']}")
+    verification = _read_json(artifact_paths["formal_verification"])
+    if verification.get("status") != "PASS":
+        raise ValueError(f"Formal verification did not pass: {cell['cell']}")
+    if verification.get("training_git_commit") != git_commit:
+        raise ValueError(f"Verification Git commit mismatch: {cell['cell']}")
+    if verification.get("historical_final_metrics") != final_metrics:
+        raise ValueError(f"Verified history metrics mismatch: {cell['cell']}")
+    if verification.get("metrics_match") is not True:
+        raise ValueError(f"Re-evaluated metrics mismatch: {cell['cell']}")
 
     artifacts = {
         name: {
@@ -289,17 +357,33 @@ def _audit_cell(
     artifacts["run_metadata"]["sha256"] = _sha256(
         artifact_paths["run_metadata"]
     )
+    artifacts["formal_verification"]["sha256"] = _sha256(
+        artifact_paths["formal_verification"]
+    )
+    artifacts["final_metrics_csv"]["sha256"] = _sha256(
+        artifact_paths["final_metrics_csv"]
+    )
+    artifacts["round_metrics_csv"]["sha256"] = _sha256(
+        artifact_paths["round_metrics_csv"]
+    )
     return {
-        "completed_round": int(rounds[-1]),
+        "completed_round": 60,
         "final_val_metrics": final_metrics,
+        "formal_verification_status": verification["status"],
         "artifacts": artifacts,
     }
 
 
-def run() -> int:
-    cells, matrix_root = _matrix_definition()
+def run(selected_cell: str | None = None) -> int:
+    all_cells, matrix_root = _matrix_definition()
+    cells = _select_cells(all_cells, selected_cell)
     run_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}"
-    evidence_dir = matrix_root / "_supervisor_logs" / run_id
+    selection_name = (
+        selected_cell.lower().replace("-", "_")
+        if selected_cell is not None
+        else "all_cells"
+    )
+    evidence_dir = matrix_root / "_supervisor_logs" / selection_name / run_id
     evidence_dir.mkdir(parents=True, exist_ok=False)
     supervisor_path = evidence_dir / "supervisor.log"
     result_path = evidence_dir / "runner_result.json"
@@ -311,6 +395,7 @@ def run() -> int:
         "started_at": _now(),
         "evidence_dir": str(evidence_dir),
         "manifest_path": str(MANIFEST_PATH),
+        "selected_cell": selected_cell,
         "cells": [],
     }
     with supervisor_path.open("a", encoding="utf-8", buffering=1) as log_handle:
@@ -366,6 +451,7 @@ def run() -> int:
                         cell["config_relative"],
                     ],
                     log_handle,
+                    cell["log_dir"] / "preflight.log",
                 )
                 _run_command(
                     [
@@ -375,6 +461,17 @@ def run() -> int:
                         cell["config_relative"],
                     ],
                     log_handle,
+                    cell["log_dir"] / "console.log",
+                )
+                _run_command(
+                    [
+                        sys.executable,
+                        "scripts/server_verify_formal_cell.py",
+                        "--config",
+                        cell["config_relative"],
+                    ],
+                    log_handle,
+                    cell["log_dir"] / "verification_console.log",
                 )
                 cell_result.update(
                     {
@@ -409,5 +506,19 @@ def run() -> int:
             return 1
 
 
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run and audit the formal four-cell experiment matrix"
+    )
+    parser.add_argument(
+        "--cell",
+        choices=EXPECTED_CELLS,
+        default=None,
+        help="Run one formal cell; omit to run all four sequentially",
+    )
+    return parser
+
+
 if __name__ == "__main__":
-    raise SystemExit(run())
+    arguments = build_parser().parse_args()
+    raise SystemExit(run(arguments.cell))
