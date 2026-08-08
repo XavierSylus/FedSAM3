@@ -57,19 +57,19 @@ EXPECTED_S2_LOG_DIR = (
 )
 EXPECTED_LOG_DIRS = {
     "fedsam3_2x2_u_fedavg.yaml": (
-        "/autodl-fs/data/FedSAM3-Cream/experiments/logs/"
+        "/root/autodl-tmp/FedSAM3-Cream/experiments/logs/"
         "fedsam3_2x2/u_fedavg"
     ),
     "fedsam3_2x2_u_fedprox.yaml": (
-        "/autodl-fs/data/FedSAM3-Cream/experiments/logs/"
+        "/root/autodl-tmp/FedSAM3-Cream/experiments/logs/"
         "fedsam3_2x2/u_fedprox"
     ),
     "fedsam3_2x2_r_fedavg.yaml": (
-        "/autodl-fs/data/FedSAM3-Cream/experiments/logs/"
+        "/root/autodl-tmp/FedSAM3-Cream/experiments/logs/"
         "fedsam3_2x2/r_fedavg"
     ),
     "fedsam3_2x2_r_fedprox.yaml": (
-        "/autodl-fs/data/FedSAM3-Cream/experiments/logs/"
+        "/root/autodl-tmp/FedSAM3-Cream/experiments/logs/"
         "fedsam3_2x2/r_fedprox"
     ),
     "fedsam3_ratio_2of3_r_fedprox.yaml": (
