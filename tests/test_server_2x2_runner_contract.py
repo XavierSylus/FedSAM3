@@ -1,5 +1,7 @@
 import ast
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -157,6 +159,28 @@ def test_formal_verifier_uses_the_training_validation_contract():
         "--log_dir",
     ):
         assert forbidden_text not in source
+
+
+def test_formal_verifier_direct_entry_bootstraps_project_root():
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            (
+                "import runpy; "
+                "runpy.run_path('server_verify_formal_cell.py', "
+                "run_name='formal_verifier_probe'); "
+                "import src"
+            ),
+        ],
+        cwd=PROJECT_ROOT / "scripts",
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_round_metrics_csv_has_one_row_per_validation_round():
