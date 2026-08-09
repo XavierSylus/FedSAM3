@@ -13,6 +13,9 @@ from scripts import server_verify_formal_cell as formal_verifier
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = PROJECT_ROOT / "configs" / "fedsam3_experiment_manifest.json"
+SEED_3408_MANIFEST_PATH = (
+    PROJECT_ROOT / "configs" / "fedsam3_experiment_manifest_seed3408.json"
+)
 RUNNER_PATH = PROJECT_ROOT / "scripts" / "server_run_2x2_matrix.py"
 EXPECTED_CELLS = [
     "U-FedAvg",
@@ -42,6 +45,37 @@ def test_formal_matrix_runner_uses_the_declared_four_cell_order():
         )
         assert config["baseline"]["method"] == entry["baseline_method"]
         assert config["baseline"]["mu"] == entry["fedprox_mu"]
+
+
+def test_seed_3408_manifest_uses_isolated_four_cell_outputs():
+    manifest = json.loads(SEED_3408_MANIFEST_PATH.read_text(encoding="utf-8"))
+    matrix = manifest["matrix"]
+
+    assert manifest["seed"] == 3408
+    assert [entry["cell"] for entry in matrix] == EXPECTED_CELLS
+
+    log_dirs = []
+    for entry in matrix:
+        config_path = PROJECT_ROOT / entry["config"]
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert config["seed"] == 3408
+        assert config["training"]["rounds"] == 60
+        assert config["federated"]["routing_mode"] == entry["routing_mode"]
+        assert (
+            config["aggregation"]["unoptimized_update_policy"]
+            == entry["unoptimized_update_policy"]
+        )
+        assert config["baseline"]["method"] == entry["baseline_method"]
+        assert config["baseline"]["mu"] == entry["fedprox_mu"]
+        log_dirs.append(config["logging"]["log_dir"])
+
+    assert len(set(log_dirs)) == 4
+    assert {
+        log_dir.rsplit("/", maxsplit=1)[0] for log_dir in log_dirs
+    } == {
+        "/root/autodl-tmp/FedSAM3-Cream/experiments/logs/"
+        "fedsam3_2x2_seed3408"
+    }
 
 
 def test_formal_matrix_runner_persists_and_audits_submission_evidence():
