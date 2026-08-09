@@ -92,6 +92,19 @@ def test_formal_matrix_runner_can_select_exactly_one_declared_cell():
         matrix_runner._select_cells(cells, "not-a-cell")
 
 
+def test_formal_matrix_runner_accepts_explicit_repo_manifest():
+    manifest_relative = Path("configs/fedsam3_experiment_manifest.json")
+    arguments = matrix_runner.build_parser().parse_args(
+        ["--manifest", str(manifest_relative), "--cell", "U-FedAvg"]
+    )
+
+    assert arguments.manifest == manifest_relative
+    assert (
+        matrix_runner._resolve_manifest_path(arguments.manifest)
+        == MANIFEST_PATH.resolve()
+    )
+
+
 def test_formal_verifier_rejects_incomplete_round_sequence():
     with pytest.raises(ValueError, match="exact rounds 1..60"):
         formal_verifier.require_exact_rounds(

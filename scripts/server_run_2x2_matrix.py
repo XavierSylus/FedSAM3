@@ -84,8 +84,26 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return value
 
 
-def _matrix_definition() -> tuple[list[dict[str, Any]], Path]:
-    manifest = _read_json(MANIFEST_PATH)
+def _resolve_manifest_path(manifest_path: Path) -> Path:
+    candidate = (
+        manifest_path
+        if manifest_path.is_absolute()
+        else PROJECT_ROOT / manifest_path
+    ).resolve()
+    try:
+        candidate.relative_to(PROJECT_ROOT)
+    except ValueError as error:
+        raise ValueError("Experiment manifest must be inside the repository") from error
+    if not candidate.is_file():
+        raise FileNotFoundError(f"Experiment manifest is missing: {candidate}")
+    return candidate
+
+
+def _matrix_definition(
+    manifest_path: Path = MANIFEST_PATH,
+) -> tuple[list[dict[str, Any]], Path]:
+    manifest_path = _resolve_manifest_path(manifest_path)
+    manifest = _read_json(manifest_path)
     matrix = manifest["matrix"]
     if not isinstance(matrix, list):
         raise TypeError("Experiment manifest matrix must be a list")
@@ -234,10 +252,11 @@ def _environment_snapshot() -> dict[str, Any]:
 def _copy_inputs(
     evidence_dir: Path,
     cells: list[dict[str, Any]],
+    manifest_path: Path,
 ) -> list[dict[str, str]]:
     input_dir = evidence_dir / "inputs"
     input_dir.mkdir(parents=True, exist_ok=False)
-    paths = [MANIFEST_PATH]
+    paths = [manifest_path]
     paths.extend(cell["config_path"] for cell in cells)
     records = []
     for path in paths:
@@ -374,8 +393,12 @@ def _audit_cell(
     }
 
 
-def run(selected_cell: str | None = None) -> int:
-    all_cells, matrix_root = _matrix_definition()
+def run(
+    selected_cell: str | None = None,
+    manifest_path: Path = MANIFEST_PATH,
+) -> int:
+    manifest_path = _resolve_manifest_path(manifest_path)
+    all_cells, matrix_root = _matrix_definition(manifest_path)
     cells = _select_cells(all_cells, selected_cell)
     run_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}"
     selection_name = (
@@ -394,7 +417,7 @@ def run(selected_cell: str | None = None) -> int:
         "status": "RUNNING",
         "started_at": _now(),
         "evidence_dir": str(evidence_dir),
-        "manifest_path": str(MANIFEST_PATH),
+        "manifest_path": str(manifest_path),
         "selected_cell": selected_cell,
         "cells": [],
     }
@@ -415,7 +438,7 @@ def run(selected_cell: str | None = None) -> int:
                     "git_log": _git_output("show", "-s", "--format=fuller", "HEAD"),
                     "disk_free_bytes_at_start": disk_usage.free,
                     "environment_path": str(installed_packages_path),
-                    "inputs": _copy_inputs(evidence_dir, cells),
+                    "inputs": _copy_inputs(evidence_dir, cells, manifest_path),
                 }
             )
             _write_json(result_path, result)
@@ -511,6 +534,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run and audit the formal four-cell experiment matrix"
     )
     parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=MANIFEST_PATH,
+        help="Repository-local experiment manifest; defaults to seed 3407",
+    )
+    parser.add_argument(
         "--cell",
         choices=EXPECTED_CELLS,
         default=None,
@@ -521,4 +550,4 @@ def build_parser() -> argparse.ArgumentParser:
 
 if __name__ == "__main__":
     arguments = build_parser().parse_args()
-    raise SystemExit(run(arguments.cell))
+    raise SystemExit(run(arguments.cell, arguments.manifest))
