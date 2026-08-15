@@ -1,0 +1,83 @@
+{
+  "manifest_schema_version": 1,
+  "protocol": "2-of-3 client-participation robustness: parameterwise routing comparison",
+  "seed": 3408,
+  "purpose": "Assess whether parameterwise routing behavior is stable when the text-only client is inactive; this is a joint participation-and-composition setting, not a causal missing-modality-ratio study.",
+  "declared_client_pool": [
+    {"client_id": "client_1", "modality": "text_only", "enabled": false},
+    {"client_id": "client_2", "modality": "image_only", "enabled": true},
+    {"client_id": "client_3", "modality": "multimodal", "enabled": true}
+  ],
+  "realized_ratios": {
+    "participation": "2/3",
+    "participation_numerator": 2,
+    "participation_denominator": 3,
+    "missing_modality_definition": "active clients without both image and text divided by active clients",
+    "missing_modality": "1/2",
+    "missing_modality_numerator": 1,
+    "missing_modality_denominator": 2
+  },
+  "fixed_controls": {
+    "data_root": "/autodl-fs/data/FedSAM3-Cream/datasets/federated_split",
+    "sample_weight": "private case count n_k",
+    "client_init_policy": "round_global",
+    "persist_client_optimizer": false,
+    "rounds": 60,
+    "local_epochs": 1,
+    "proxy": {"client_id": "client_3", "batches": 4, "round_global_detached": true},
+    "local_objectives": {
+      "image_only": "L_seg = DiceLoss + BCEWithLogitsLoss",
+      "multimodal": "L_seg + 0.1 * L_cream"
+    },
+    "reproducibility": {
+      "mode": "best_effort_cuda",
+      "deterministic_algorithms": true,
+      "deterministic_warn_only": true,
+      "num_workers": 0,
+      "persistent_workers": false
+    }
+  },
+  "aggregation_contract": {
+    "unrestricted": {
+      "unoptimized_update_policy": "include_zero",
+      "eligible_clients": ["client_2", "client_3"],
+      "formula": "Delta_p^U = sum_k(n_k * Delta_{k,p}) / sum_k(n_k), with Delta_{k,p}=0 for an unoptimized active client"
+    },
+    "restricted": {
+      "unoptimized_update_policy": "exclude_and_renormalize",
+      "eligible_clients": "active clients whose modality is allowed for parameter group G(p)",
+      "empty_eligible_rule": "preserve theta_p^t and write an aggregation audit event"
+    },
+    "parameter_groups": {
+      "VISION_ADAPTER": ["image_only", "multimodal"],
+      "IMAGE_PARAMS": ["image_only", "multimodal"],
+      "TEXT_ADAPTER": ["text_only", "multimodal"],
+      "TEXT_PARAMS": ["text_only", "multimodal"],
+      "FUSION_PARAMS": ["multimodal"]
+    }
+  },
+  "cells": [
+    {
+      "cell": "2of3-U-FedAvg",
+      "routing_mode": "unrestricted",
+      "unoptimized_update_policy": "include_zero",
+      "baseline_method": "none",
+      "fedprox_mu": 0.0,
+      "config": "configs/fedsam3_ratio_2of3_seed3408_u_fedavg.yaml"
+    },
+    {
+      "cell": "2of3-R-FedAvg",
+      "routing_mode": "restricted",
+      "unoptimized_update_policy": "exclude_and_renormalize",
+      "baseline_method": "none",
+      "fedprox_mu": 0.0,
+      "config": "configs/fedsam3_ratio_2of3_seed3408_r_fedavg.yaml"
+    }
+  ],
+  "parameter_group_analysis": {
+    "VISION_ADAPTER_and_IMAGE_PARAMS": "Compute image_only-versus-multimodal update cosine, angle, negative-cosine indicator, client relative drift/update RMS, and server drift. U and R have the same first-round eligible client set for these groups.",
+    "TEXT_ADAPTER_and_TEXT_PARAMS": "Only multimodal has an uploaded update. Record client and server drift plus aggregation participation; pairwise conflict is undefined, not zero.",
+    "FUSION_PARAMS": "Only multimodal has an uploaded update. Record client and server drift plus aggregation participation; pairwise conflict is undefined, not zero.",
+    "round_one_invariant": "Under matched seed and controls, U and R client updates and pairwise conflict must match in round one; only server aggregation drift may differ."
+  }
+}
