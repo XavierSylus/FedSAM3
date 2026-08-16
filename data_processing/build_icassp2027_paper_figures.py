@@ -110,6 +110,7 @@ def build_figure(config: dict[str, Any], config_path: Path, figure: dict[str, An
 def build_manifest(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
     source_document = resolve_path(config["source_document"], config_path)
     output_dir = resolve_path(config["output_dir"], config_path)
+    dpi = int(config["raster_pdf_dpi"])
     records: list[dict[str, Any]] = []
     for figure in config["figures"]:
         stem = figure["stem"]
