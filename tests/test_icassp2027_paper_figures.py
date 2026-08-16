@@ -19,6 +19,15 @@ def load_module():
 
 
 class PaperFigureManifestTests(unittest.TestCase):
+    def test_title_metadata_placeholders_do_not_begin_optional_arguments(self) -> None:
+        manuscript = (
+            ROOT / "paper_submission" / "icassp2027_fedsam3_hetero" / "manuscript.tex"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("\\name{[", manuscript)
+        self.assertNotIn("\\address{[", manuscript)
+        self.assertNotIn("\\varnothing", manuscript)
+
     def test_build_manifest_reads_pdf_dpi_from_config(self) -> None:
         module = load_module()
         with tempfile.TemporaryDirectory() as temporary_directory:
