@@ -1,0 +1,123 @@
+{
+  "figure": {
+    "id": "fedsam3_pipeline_figure_refined",
+    "width_inches": 7.2047244094,
+    "height_inches": 4.76,
+    "dpi": 600,
+    "output_dir": "figures/fedsam3_pipeline_figure_refined",
+    "formats": ["svg", "pdf", "png"],
+    "pure_vector_svg": true,
+    "deterministic": true,
+    "random_seed": null
+  },
+  "style": {
+    "font_family": ["Arial", "DejaVu Sans", "Liberation Sans"],
+    "font_size": 7.0,
+    "minimum_font_size": 5.0,
+    "ink": "#20252B",
+    "muted": "#6C747D",
+    "edge": "#3D4650",
+    "arrow": "#505963",
+    "panel_fill": "#FBFCFE",
+    "neutral": "#F0F2F4",
+    "server": "#E6EEF7",
+    "blue": "#DCEAF7",
+    "blue_accent": "#4F7CAC",
+    "cream": "#F7E7B8",
+    "cream_accent": "#C78D2A",
+    "green": "#DDEED7",
+    "green_accent": "#629E66",
+    "lilac": "#EEE7F6",
+    "lilac_accent": "#8A6BA4"
+  },
+  "contract": {
+    "core_conclusion": "FedSAM3-Cream lets each heterogeneous client optimize only its modality-compatible parameter groups, then performs group-wise aggregation without treating missing updates as eligible uploads.",
+    "archetype": "schematic-led composite",
+    "target": "ICASSP paper method figure",
+    "final_size_mm": [183.0, 120.904],
+    "panel_map": {
+      "a": "Three private modality settings receive the same server round state and a detached public proxy, optimize only their local objectives, and emit optimizer-scoped parameter deltas.",
+      "b": "The server aggregates each parameter group over the compatible uploader set while retaining the unrestricted denominator rule as the controlled alternative.",
+      "c": "Routing policy and the local FedProx objective form a controlled two-by-two study."
+    },
+    "evidence_boundary": "The figure contains abstract document, MRI, module, and parameter-group icons only. It contains no patient imagery, prediction masks, performance values, or experimental outcomes.",
+    "reviewer_risk": "The figure must not imply that the detached proxy routes parameters, that clients share identical optimization scopes, that persistent buffers are uploaded, or that all parameter groups use the same eligible client set."
+  },
+  "protocol": {
+    "shared_state": {
+      "title": "Shared server round state  w(t)",
+      "subtitle": "fresh local optimizer at every client",
+      "proxy_title": "C3 public batch → detached proxy",
+      "proxy_subtitle": "normalized g_img, g_txt; alignment only"
+    },
+    "clients": [
+      {
+        "id": "C1",
+        "name": "Text-only",
+        "input": "private text",
+        "icon": "text",
+        "modules": ["text projection", "prompt encoder"],
+        "loss": "L_text",
+        "upload_lines": ["TEXT_ADAPTER", "TEXT_PARAMS"],
+        "fill_key": "cream",
+        "accent_key": "cream_accent"
+      },
+      {
+        "id": "C2",
+        "name": "Image-only",
+        "input": "private MRI + mask",
+        "icon": "mri",
+        "modules": ["frozen SAM3", "vision adapter"],
+        "loss": "L_seg",
+        "upload_lines": ["VISION_ADAPTER", "IMAGE_PARAMS"],
+        "fill_key": "blue",
+        "accent_key": "blue_accent"
+      },
+      {
+        "id": "C3",
+        "name": "Multimodal",
+        "input": "private MRI + text + mask",
+        "icon": "multimodal",
+        "modules": ["frozen SAM3", "adapter + fusion"],
+        "loss": "L_seg + λL_cream",
+        "upload_lines": ["all five", "parameter groups"],
+        "fill_key": "green",
+        "accent_key": "green_accent"
+      }
+    ],
+    "routes": [
+      {
+        "label_lines": ["TEXT_ADAPTER +", "TEXT_PARAMS"],
+        "eligible": "R: C1 + C3",
+        "fill_key": "cream"
+      },
+      {
+        "label_lines": ["VISION_ADAPTER +", "IMAGE_PARAMS"],
+        "eligible": "R: C2 + C3",
+        "fill_key": "blue"
+      },
+      {
+        "label_lines": ["FUSION_PARAMS"],
+        "eligible": "R: C3 only",
+        "fill_key": "green"
+      }
+    ],
+    "aggregation_rules": [
+      ["U", "all active clients stay in denominator; unoptimized Δθ = 0"],
+      ["R", "compatible uploaders only; no eligible update → retain w(t)"],
+      ["buffers", "server-owned; never uploaded or aggregated"]
+    ],
+    "controls": [
+      "same data, seed schedule, model, and local task losses",
+      "FedProx adds only the local proximal term"
+    ]
+  },
+  "source_trace": [
+    "src/integrated_model.py",
+    "src/client.py",
+    "src/server.py",
+    "src/parameter_groups.py",
+    "docs/FEDSAM3_EXPERIMENT_PROTOCOL.md",
+    "configs/fedsam3_experiment_manifest.json"
+  ]
+}
