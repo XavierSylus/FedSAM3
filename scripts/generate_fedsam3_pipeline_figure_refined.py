@@ -584,11 +584,15 @@ def save_formats(
         suffix = suffix.lower()
         if suffix not in {"svg", "pdf", "png"}:
             raise ValueError(f"Unsupported format: {suffix}")
-        output_path = output_dir / f"{figure['id']}.{suffix}"
-        kwargs: dict[str, Any] = {"format": suffix, "facecolor": "white"}
-        if suffix == "png":
-            kwargs["dpi"] = figure["dpi"]
-        fig.savefig(output_path, **kwargs)
+        if suffix == "svg":
+            output_path = output_dir / f"{figure['id']}.svg"
+            fig.savefig(output_path, format="svg", facecolor="white")
+        elif suffix == "pdf":
+            output_path = output_dir / f"{figure['id']}.pdf"
+            fig.savefig(output_path, format="pdf", facecolor="white")
+        else:
+            output_path = output_dir / f"{figure['id']}.png"
+            fig.savefig(output_path, format="png", dpi=figure["dpi"], facecolor="white")
         saved.append(output_path)
     return saved
 
@@ -598,6 +602,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--formats", nargs="+", choices=["svg", "pdf", "png"])
     parser.add_argument("--write-manifest", action="store_true")
+    parser.add_argument("--manifest-only", action="store_true")
     return parser.parse_args()
 
 
@@ -607,6 +612,9 @@ def main() -> None:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     formats = args.formats or config["figure"]["formats"]
     output_dir = REPO_ROOT / config["figure"]["output_dir"]
+    if args.manifest_only:
+        print(write_manifest(config, config_path, output_dir, Path(__file__).resolve()))
+        return
     fig = render(config)
     try:
         for path in save_formats(fig, config, output_dir, formats):
