@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "package_name": "fedsam3_2x2_final_evidence",
+  "archive_root": "H:/新增实验",
+  "output_dir": "deliverables/fedsam3_2x2_final_evidence",
+  "expected": {
+    "seeds": [3407, 3408, 3409],
+    "cells": ["U-FedAvg", "U-FedProx", "R-FedAvg", "R-FedProx"],
+    "round": 60,
+    "num_cases": 32,
+    "data_manifest_sha256": "86cd3884155178664e81528d244cdddf3068ecfd09a8094b23e08a8ffd410544",
+    "hd95_unit": "mm",
+    "hd95_dimension": "3d_case"
+  },
+  "checkpoint_selection": {
+    "paper_checkpoint": "final_model.pth",
+    "paper_round": 60,
+    "selection_type": "fixed_final_round",
+    "excluded_from_primary_comparison": ["best_model.pth"],
+    "equivalence_required": [
+      "checkpoint_round_60.pth",
+      "latest_checkpoint.pth"
+    ],
+    "verification_source": "formal_verification.json",
+    "reason": "Use the same predeclared final round for every seed and cell; do not select a checkpoint from validation performance."
+  },
+  "matrix_unique_variables": [
+    "seed",
+    "federated.routing_mode",
+    "aggregation.unoptimized_update_policy",
+    "baseline.method",
+    "baseline.mu",
+    "logging.log_dir",
+    "logging.experiment_name"
+  ],
+  "archive_artifacts": {
+    "final_metrics_csv": "formal_verification/final_metrics.csv",
+    "round_metrics_csv": "formal_verification/round_metrics.csv",
+    "formal_verification_json": "formal_verification/formal_verification.json",
+    "preflight_log": "preflight.log",
+    "console_log": "console.log",
+    "verification_console_log": "verification_console.log",
+    "parameter_group_diagnostics_csv": "parameter_group_diagnostics.csv"
+  },
+  "cells": [
+    {
+      "seed": 3407,
+      "cell": "U-FedAvg",
+      "routing": "U",
+      "aggregation": "FedAvg",
+      "config": "configs/fedsam3_2x2_u_fedavg.yaml",
+      "manifest": "configs/fedsam3_experiment_manifest.json",
+      "archive": "fedsam3_seed3407_u_fedavg_full.tar.gz",
+      "archive_prefix": "experiments/logs/fedsam3_2x2/u_fedavg"
+    },
+    {
+      "seed": 3407,
+      "cell": "U-FedProx",
+      "routing": "U",
+      "aggregation": "FedProx",
+      "config": "configs/fedsam3_2x2_u_fedprox.yaml",
+      "manifest": "configs/fedsam3_experiment_manifest.json",
+      "archive": "fedsam3_seed3407_u_fedprox_full.tar.gz",
+      "archive_prefix": "experiments/logs/fedsam3_2x2/u_fedprox"
+    },
+    {
+      "seed": 3407,
+      "cell": "R-FedAvg",
+      "routing": "R",
+      "aggregation": "FedAvg",
+      "config": "configs/fedsam3_2x2_r_fedavg.yaml",
+      "manifest": "configs/fedsam3_experiment_manifest.json",
+      "archive": "fedsam3_seed3407_r_fedavg_full.tar.gz",
+      "archive_prefix": "experiments/logs/fedsam3_2x2/r_fedavg"
+    },
+    {
+      "seed": 3407,
+      "cell": "R-FedProx",
+      "routing": "R",
+      "aggregation": "FedProx",
+      "config": "configs/fedsam3_2x2_r_fedprox.yaml",
+      "manifest": "configs/fedsam3_experiment_manifest.json",
+      "archive": "fedsam3_seed3407_r_fedprox_full.tar.gz",
+      "archive_prefix": "experiments/logs/fedsam3_2x2/r_fedprox"
+    },
+    {
+      "seed": 3408,
+      "cell": "U-FedAvg",
+      "routing": "U",
+      "aggregation": "FedAvg",
+      "config": "configs/fedsam3_2x2_seed3408_u_fedavg.yaml",
+      "manifest": "configs/fedsam3_experiment_manifest_seed3408.json",
+      "archive": "fedsam3_seed3408_u_fedavg_full_v1.tar.gz",
+      "archive_prefix": "experiments/logs/fedsam3_2x2_seed3408/u_fedavg"
+    },
+    {
+      "seed": 3408,
+      "cell": "U-FedProx",
+      "routing": "U",
+      "aggregation": "FedProx",
+      "config": "configs/fedsam3_2x2_seed3408_u_fedprox.yaml",
+      "manifest": "configs/fedsam3_experiment_manifest_seed3408.json",
+      "archive": "fedsam3_seed3408_u_fedprox_full_v1.tar.gz",
+      "archive_prefix": "experiments/logs/fedsam3_2x2_seed3408/u_fedprox"
+    },
+    {
+      "seed": 3408,
+      "cell": "R-FedAvg",
+      "routing": "R",
+      "aggregation": "FedAvg",
+      "config": "configs/fedsam3_2x2_seed3408_r_fedavg.yaml",
+      "manifest": "configs/fedsam3_experiment_manifest_seed3408.json",
+      "archive": "fedsam3_seed3408_r_fedavg_full_v1.tar.gz",
+      "archive_prefix": "experiments/logs/fedsam3_2x2_seed3408/r_fedavg"
+    },
+    {
+      "seed": 3408,
+      "cell": "R-FedProx",
+      "routing": "R",
+      "aggregation": "FedProx",
+      "config": "configs/fedsam3_2x2_seed3408_r_fedprox.yaml",
+      "manifest": "configs/fedsam3_experiment_manifest_seed3408.json",
+      "archive": "fedsam3_seed3408_r_fedprox_full_v1.tar.gz",
+      "archive_prefix": "experiments/logs/fedsam3_2x2_seed3408/r_fedprox"
+    },
+    {
+      "seed": 3409,
+      "cell": "U-FedAvg",
+      "routing": "U",
+      "aggregation": "FedAvg",
+      "config": "configs/fedsam3_2x2_seed3409_u_fedavg.yaml",
+      "manifest": "configs/fedsam3_experiment_manifest_seed3409.json",
+      "archive": "fedsam3_seed3409_u_fedavg_full_v1.tar.gz",
+      "archive_prefix": "experiments/logs/fedsam3_2x2_seed3409/u_fedavg"
+    },
+    {
+      "seed": 3409,
+      "cell": "U-FedProx",
+      "routing": "U",
+      "aggregation": "FedProx",
+      "config": "configs/fedsam3_2x2_seed3409_u_fedprox.yaml",
+      "manifest": "configs/fedsam3_experiment_manifest_seed3409.json",
+      "archive": "fedsam3_seed3409_u_fedprox_full_v1.tar.gz",
+      "archive_prefix": "experiments/logs/fedsam3_2x2_seed3409/u_fedprox"
+    },
+    {
+      "seed": 3409,
+      "cell": "R-FedAvg",
+      "routing": "R",
+      "aggregation": "FedAvg",
+      "config": "configs/fedsam3_2x2_seed3409_r_fedavg.yaml",
+      "manifest": "configs/fedsam3_experiment_manifest_seed3409.json",
+      "archive": "fedsam3_seed3409_r_fedavg_full_v1.tar.gz",
+      "archive_prefix": "experiments/logs/fedsam3_2x2_seed3409/r_fedavg"
+    },
+    {
+      "seed": 3409,
+      "cell": "R-FedProx",
+      "routing": "R",
+      "aggregation": "FedProx",
+      "config": "configs/fedsam3_2x2_seed3409_r_fedprox.yaml",
+      "manifest": "configs/fedsam3_experiment_manifest_seed3409.json",
+      "archive": "fedsam3_seed3409_r_fedprox_full_v1.tar.gz",
+      "archive_prefix": "experiments/logs/fedsam3_2x2_seed3409/r_fedprox"
+    }
+  ]
+}
