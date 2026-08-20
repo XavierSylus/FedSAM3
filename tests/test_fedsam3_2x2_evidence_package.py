@@ -111,3 +111,30 @@ def test_collector_stops_before_checkpoint_payloads(tmp_path):
         csv.DictReader(io.StringIO(artifacts["formal_verification/final_metrics.csv"].decode()))
     )
     assert rows == [{"seed": "3407", "round": "60", "dice": "0.5"}]
+
+
+def test_optional_validation_console_after_checkpoint_is_not_required(tmp_path):
+    prefix = "experiments/logs/test_cell"
+    required_payload = b'{"status":"PASS"}'
+    archive_path = tmp_path / "cell_optional_after_checkpoint.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as archive:
+        info = tarfile.TarInfo(f"{prefix}/formal_verification/formal_verification.json")
+        info.size = len(required_payload)
+        archive.addfile(info, io.BytesIO(required_payload))
+        checkpoint = b"checkpoint"
+        info = tarfile.TarInfo(f"{prefix}/checkpoints/final_model.pth")
+        info.size = len(checkpoint)
+        archive.addfile(info, io.BytesIO(checkpoint))
+        optional_payload = b"PASS\n"
+        info = tarfile.TarInfo(f"{prefix}/verification_console.log")
+        info.size = len(optional_payload)
+        archive.addfile(info, io.BytesIO(optional_payload))
+
+    artifacts = collector.read_selected_members(
+        archive_path,
+        prefix,
+        {"formal_verification_json": "formal_verification/formal_verification.json"},
+        {"verification_console_log": "verification_console.log"},
+    )
+
+    assert artifacts == {"formal_verification_json": required_payload}

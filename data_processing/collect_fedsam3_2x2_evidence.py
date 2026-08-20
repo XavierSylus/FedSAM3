@@ -41,22 +41,32 @@ def read_selected_members(
     archive_path: Path,
     archive_prefix: str,
     artifact_members: Mapping[str, str],
+    optional_artifact_members: Mapping[str, str] | None = None,
 ) -> dict[str, bytes]:
-    expected = {
+    required = {
         f"{archive_prefix.rstrip('/')}/{relative}": logical_name
         for logical_name, relative in artifact_members.items()
     }
+    optional_artifact_members = optional_artifact_members or {}
+    optional = {
+        f"{archive_prefix.rstrip('/')}/{relative}": logical_name
+        for logical_name, relative in optional_artifact_members.items()
+    }
+    expected = {**required, **optional}
     found: dict[str, bytes] = {}
     checkpoint_prefix = f"{archive_prefix.rstrip('/')}/checkpoints/"
 
     with tarfile.open(archive_path, mode="r:gz") as archive:
         while (member := archive.next()) is not None:
-            if member.name.startswith(checkpoint_prefix) and len(found) != len(expected):
-                missing = sorted(set(expected.values()) - set(found))
-                raise RuntimeError(
-                    "Required lightweight evidence was not found before checkpoint "
-                    f"payloads in {archive_path.name}: {missing}"
-                )
+            required_names = set(required.values())
+            if member.name.startswith(checkpoint_prefix):
+                if not required_names.issubset(found):
+                    missing = sorted(required_names - set(found))
+                    raise RuntimeError(
+                        "Required lightweight evidence was not found before checkpoint "
+                        f"payloads in {archive_path.name}: {missing}"
+                    )
+                break
             logical_name = expected.get(member.name)
             if logical_name is None:
                 continue
@@ -64,7 +74,10 @@ def read_selected_members(
             if source is None:
                 raise RuntimeError(f"Could not read archive member: {member.name}")
             found[logical_name] = source.read()
-            if len(found) == len(expected):
+            if required_names.issubset(found) and (
+                set(optional.values()).issubset(found)
+                or member.name.startswith(checkpoint_prefix)
+            ):
                 break
 
     missing = sorted(set(artifact_members) - set(found))
@@ -73,6 +86,41 @@ def read_selected_members(
             f"Missing evidence members in {archive_path.name}: {missing}"
         )
     return found
+
+
+def _artifact_filename(
+    logical_name: str,
+    required: Mapping[str, str],
+    optional: Mapping[str, str],
+) -> str:
+    if logical_name == "config_yaml":
+        return "config.yaml"
+    if logical_name == "experiment_manifest_json":
+        return "experiment_manifest.json"
+    return Path({**required, **optional}[logical_name]).name
+
+
+def _existing_artifacts(
+    destination: Path,
+    required: Mapping[str, str],
+    optional: Mapping[str, str],
+) -> dict[str, bytes]:
+    artifacts: dict[str, bytes] = {}
+    for logical_name in required:
+        path = destination / _artifact_filename(logical_name, required, optional)
+        if not path.is_file():
+            raise FileNotFoundError(f"Incomplete existing evidence directory: {path}")
+        artifacts[logical_name] = path.read_bytes()
+    for logical_name in optional:
+        path = destination / _artifact_filename(logical_name, required, optional)
+        if path.is_file():
+            artifacts[logical_name] = path.read_bytes()
+    for logical_name in ("config_yaml", "experiment_manifest_json"):
+        path = destination / _artifact_filename(logical_name, required, optional)
+        if not path.is_file():
+            raise FileNotFoundError(f"Incomplete existing evidence directory: {path}")
+        artifacts[logical_name] = path.read_bytes()
+    return artifacts
 
 
 def _validate_matrix(config: Mapping[str, Any]) -> None:
@@ -88,18 +136,26 @@ def _validate_matrix(config: Mapping[str, Any]) -> None:
         raise ValueError("Evidence configuration must declare each seed/cell once")
 
 
-def collect(config_path: Path, output_override: Path | None = None) -> dict[str, Any]:
+def collect(
+    config_path: Path,
+    output_override: Path | None = None,
+    resume: bool = False,
+) -> dict[str, Any]:
     config_path = config_path.resolve()
     config = load_config(config_path)
     _validate_matrix(config)
     archive_root = Path(config["archive_root"])
     output_dir = output_override or PROJECT_ROOT / config["output_dir"]
     output_dir = output_dir.resolve()
-    if output_dir.exists():
+    if output_dir.exists() and not resume:
         raise FileExistsError(f"Evidence output already exists: {output_dir}")
-    output_dir.mkdir(parents=True, exist_ok=False)
+    if output_dir.exists() and (output_dir / "collection_manifest.json").exists():
+        raise FileExistsError(f"Completed evidence output already exists: {output_dir}")
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     records: list[dict[str, Any]] = []
+    required_artifacts = config["archive_artifacts"]
+    optional_artifacts = config.get("optional_archive_artifacts", {})
     for cell in config["cells"]:
         archive_path = archive_root / cell["archive"]
         if not archive_path.is_file():
@@ -110,27 +166,33 @@ def collect(config_path: Path, output_override: Path | None = None) -> dict[str,
         manifest_source.relative_to(PROJECT_ROOT)
 
         destination = target_directory(output_dir, cell)
-        destination.mkdir(parents=True, exist_ok=False)
-        artifacts = read_selected_members(
-            archive_path,
-            str(cell["archive_prefix"]),
-            config["archive_artifacts"],
-        )
-        config_payload = normalized_text_bytes(config_source)
-        manifest_payload = normalized_text_bytes(manifest_source)
-        artifacts["config_yaml"] = config_payload
-        artifacts["experiment_manifest_json"] = manifest_payload
+        if destination.exists() and any(destination.iterdir()):
+            if not resume:
+                raise FileExistsError(f"Evidence cell already exists: {destination}")
+            artifacts = _existing_artifacts(
+                destination, required_artifacts, optional_artifacts
+            )
+        else:
+            destination.mkdir(parents=True, exist_ok=True)
+            artifacts = read_selected_members(
+                archive_path,
+                str(cell["archive_prefix"]),
+                required_artifacts,
+                optional_artifacts,
+            )
+            artifacts["config_yaml"] = normalized_text_bytes(config_source)
+            artifacts["experiment_manifest_json"] = normalized_text_bytes(
+                manifest_source
+            )
 
         artifact_records: dict[str, Any] = {}
         for logical_name, payload in artifacts.items():
-            if logical_name == "config_yaml":
-                filename = "config.yaml"
-            elif logical_name == "experiment_manifest_json":
-                filename = "experiment_manifest.json"
-            else:
-                filename = Path(config["archive_artifacts"][logical_name]).name
+            filename = _artifact_filename(
+                logical_name, required_artifacts, optional_artifacts
+            )
             output_path = destination / filename
-            output_path.write_bytes(payload)
+            if not output_path.exists():
+                output_path.write_bytes(payload)
             artifact_records[logical_name] = {
                 "path": str(output_path.relative_to(output_dir)).replace("\\", "/"),
                 "bytes": len(payload),
@@ -144,6 +206,9 @@ def collect(config_path: Path, output_override: Path | None = None) -> dict[str,
                 "archive_path": str(archive_path),
                 "artifact_directory": str(destination.relative_to(output_dir)).replace(
                     "\\", "/"
+                ),
+                "missing_optional_artifacts": sorted(
+                    set(optional_artifacts) - set(artifacts)
                 ),
                 "final_metrics_csv_sha256": final_csv_hash,
                 "artifacts": artifact_records,
@@ -173,12 +238,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--resume", action="store_true")
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
-    result = collect(args.config, args.output_dir)
+    result = collect(args.config, args.output_dir, args.resume)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 

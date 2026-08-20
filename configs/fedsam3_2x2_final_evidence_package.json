@@ -39,8 +39,10 @@
     "formal_verification_json": "formal_verification/formal_verification.json",
     "preflight_log": "preflight.log",
     "console_log": "console.log",
-    "verification_console_log": "verification_console.log",
     "parameter_group_diagnostics_csv": "parameter_group_diagnostics.csv"
+  },
+  "optional_archive_artifacts": {
+    "verification_console_log": "verification_console.log"
   },
   "cells": [
     {
