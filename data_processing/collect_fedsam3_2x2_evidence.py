@@ -55,18 +55,16 @@ def read_selected_members(
     expected = {**required, **optional}
     found: dict[str, bytes] = {}
     checkpoint_prefix = f"{archive_prefix.rstrip('/')}/checkpoints/"
+    crossed_checkpoint_payloads = False
 
     with tarfile.open(archive_path, mode="r:gz") as archive:
         while (member := archive.next()) is not None:
             required_names = set(required.values())
             if member.name.startswith(checkpoint_prefix):
-                if not required_names.issubset(found):
-                    missing = sorted(required_names - set(found))
-                    raise RuntimeError(
-                        "Required lightweight evidence was not found before checkpoint "
-                        f"payloads in {archive_path.name}: {missing}"
-                    )
-                break
+                if required_names.issubset(found):
+                    break
+                crossed_checkpoint_payloads = True
+                continue
             logical_name = expected.get(member.name)
             if logical_name is None:
                 continue
@@ -76,7 +74,7 @@ def read_selected_members(
             found[logical_name] = source.read()
             if required_names.issubset(found) and (
                 set(optional.values()).issubset(found)
-                or member.name.startswith(checkpoint_prefix)
+                or crossed_checkpoint_payloads
             ):
                 break
 
@@ -85,6 +83,9 @@ def read_selected_members(
         raise FileNotFoundError(
             f"Missing evidence members in {archive_path.name}: {missing}"
         )
+    found["_crossed_checkpoint_payloads"] = (
+        b"true" if crossed_checkpoint_payloads else b"false"
+    )
     return found
 
 
@@ -166,12 +167,14 @@ def collect(
         manifest_source.relative_to(PROJECT_ROOT)
 
         destination = target_directory(output_dir, cell)
-        if destination.exists() and any(destination.iterdir()):
+        reused_existing = destination.exists() and any(destination.iterdir())
+        if reused_existing:
             if not resume:
                 raise FileExistsError(f"Evidence cell already exists: {destination}")
             artifacts = _existing_artifacts(
                 destination, required_artifacts, optional_artifacts
             )
+            crossed_checkpoint_payloads = False
         else:
             destination.mkdir(parents=True, exist_ok=True)
             artifacts = read_selected_members(
@@ -179,6 +182,9 @@ def collect(
                 str(cell["archive_prefix"]),
                 required_artifacts,
                 optional_artifacts,
+            )
+            crossed_checkpoint_payloads = (
+                artifacts.pop("_crossed_checkpoint_payloads") == b"true"
             )
             artifacts["config_yaml"] = normalized_text_bytes(config_source)
             artifacts["experiment_manifest_json"] = normalized_text_bytes(
@@ -210,6 +216,7 @@ def collect(
                 "missing_optional_artifacts": sorted(
                     set(optional_artifacts) - set(artifacts)
                 ),
+                "crossed_checkpoint_payloads": crossed_checkpoint_payloads,
                 "final_metrics_csv_sha256": final_csv_hash,
                 "artifacts": artifact_records,
             }

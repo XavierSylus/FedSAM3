@@ -106,7 +106,8 @@ def test_collector_stops_before_checkpoint_payloads(tmp_path):
         {name: relative for name, relative in zip(members, members)},
     )
 
-    assert set(artifacts) == set(members)
+    assert set(artifacts) == {*members, "_crossed_checkpoint_payloads"}
+    assert artifacts["_crossed_checkpoint_payloads"] == b"false"
     rows = list(
         csv.DictReader(io.StringIO(artifacts["formal_verification/final_metrics.csv"].decode()))
     )
@@ -137,4 +138,40 @@ def test_optional_validation_console_after_checkpoint_is_not_required(tmp_path):
         {"verification_console_log": "verification_console.log"},
     )
 
-    assert artifacts == {"formal_verification_json": required_payload}
+    assert artifacts == {
+        "formal_verification_json": required_payload,
+        "_crossed_checkpoint_payloads": b"false",
+    }
+
+
+def test_required_training_log_after_checkpoint_is_collected(tmp_path):
+    prefix = "experiments/logs/test_cell"
+    formal_payload = b'{"status":"PASS"}'
+    console_payload = b"training complete\n"
+    archive_path = tmp_path / "cell_required_after_checkpoint.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as archive:
+        info = tarfile.TarInfo(f"{prefix}/formal_verification/formal_verification.json")
+        info.size = len(formal_payload)
+        archive.addfile(info, io.BytesIO(formal_payload))
+        checkpoint = b"checkpoint-not-extracted"
+        info = tarfile.TarInfo(f"{prefix}/checkpoints/final_model.pth")
+        info.size = len(checkpoint)
+        archive.addfile(info, io.BytesIO(checkpoint))
+        info = tarfile.TarInfo(f"{prefix}/console.log")
+        info.size = len(console_payload)
+        archive.addfile(info, io.BytesIO(console_payload))
+
+    artifacts = collector.read_selected_members(
+        archive_path,
+        prefix,
+        {
+            "formal_verification_json": "formal_verification/formal_verification.json",
+            "console_log": "console.log",
+        },
+    )
+
+    assert artifacts == {
+        "formal_verification_json": formal_payload,
+        "console_log": console_payload,
+        "_crossed_checkpoint_payloads": b"true",
+    }
