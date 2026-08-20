@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "seed": 3407,
+  "expected_training_git_commit": "2d5c42675ea7722f42c51fea6733bda16832f638",
+  "archive_root": "H:/新增实验",
+  "clients": {
+    "client_1": "text_only",
+    "client_2": "image_only",
+    "client_3": "multimodal"
+  },
+  "sources": [
+    {
+      "cell": "U-FedAvg",
+      "archive": "fedsam3_seed3407_u_fedavg_full.tar.gz",
+      "formal_verification_member": "experiments/logs/fedsam3_2x2/u_fedavg/formal_verification/formal_verification.json",
+      "training_history_member": "experiments/logs/fedsam3_2x2/u_fedavg/checkpoints/training_history.json"
+    },
+    {
+      "cell": "R-FedAvg",
+      "archive": "fedsam3_seed3407_r_fedavg_full.tar.gz",
+      "formal_verification_member": "experiments/logs/fedsam3_2x2/r_fedavg/formal_verification/formal_verification.json",
+      "training_history_member": "experiments/logs/fedsam3_2x2/r_fedavg/checkpoints/training_history.json"
+    }
+  ],
+  "output": {
+    "directory": "deliverables/fedsam3_aggregation_audit/seed3407",
+    "csv": "aggregation_audit.csv",
+    "jsonl": "aggregation_audit.jsonl",
+    "manifest": "manifest.json"
+  }
+}
