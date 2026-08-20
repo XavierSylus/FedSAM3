@@ -26,3 +26,6 @@ logs/
 *.csv
 dataset_info*.csv
 nul
+
+# 本地聚合审计交付文件，不推送到远端仓库
+deliverables/fedsam3_aggregation_audit/
