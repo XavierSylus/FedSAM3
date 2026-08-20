@@ -16,6 +16,13 @@ from src.parameter_groups import (
 )
 
 
+ROUTING_MODES = frozenset({
+    "unrestricted",
+    "uploader_renormalized",
+    "restricted",
+})
+
+
 class CreamAggregator:
     """
     CreamFL 联邦聚合器。
@@ -255,9 +262,9 @@ class CreamAggregator:
             raise ValueError(
                 "Parameterwise U/R aggregation requires aggregation_method='fedavg'"
             )
-        if routing_mode not in {"unrestricted", "restricted"}:
+        if routing_mode not in ROUTING_MODES:
             raise ValueError(
-                "routing_mode must be 'unrestricted' or 'restricted'"
+                f"routing_mode must be one of {sorted(ROUTING_MODES)}"
             )
 
         active_client_ids = sorted(client_updates)
@@ -357,7 +364,7 @@ class CreamAggregator:
         client_sample_counts: Dict[str, int],
         routing_mode: str,
     ) -> Dict[str, torch.Tensor]:
-        """Aggregate optimizer-scoped parameter deltas under the U/R contract."""
+        """Aggregate optimizer-scoped parameter deltas under the U/N/R contract."""
         active_client_ids, parameter_groups = (
             self._validate_parameterwise_aggregation_inputs(
                 round_global_parameters=round_global_parameters,
@@ -381,15 +388,17 @@ class CreamAggregator:
                 if parameter_name in client_updates[client_id]
             ]
 
-            if routing_mode == "unrestricted":
-                eligible_client_ids = list(active_client_ids)
-            else:
+            if routing_mode == "restricted":
                 allowed = allowed_modalities(parameter_group)
                 eligible_client_ids = [
                     client_id
                     for client_id in uploaded_client_ids
                     if client_modalities[client_id] in allowed
                 ]
+            elif routing_mode == "uploader_renormalized":
+                eligible_client_ids = list(uploaded_client_ids)
+            else:
+                eligible_client_ids = list(active_client_ids)
 
             empty_eligible = not eligible_client_ids
             if empty_eligible:

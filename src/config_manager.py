@@ -149,7 +149,7 @@ class FederatedConfig:
     """逐参数聚合方法；严格实验只接受显式的 fedavg。"""
 
     routing_mode: Optional[str] = None
-    """逐参数路由模式；必须显式为 unrestricted 或 restricted。"""
+    """逐参数路由模式；必须显式为 unrestricted、uploader_renormalized 或 restricted。"""
 
     sample_weight_unit: Optional[str] = None
     """FedAvg 样本权重单位；必须显式为 private_cases。"""
@@ -347,19 +347,21 @@ class FederatedConfig:
             raise ValueError(
                 "aggregation.method must be explicitly set to 'fedavg'"
             )
-        if self.routing_mode not in {"unrestricted", "restricted"}:
+        update_policy_by_routing = {
+            "unrestricted": "include_zero",
+            "uploader_renormalized": "exclude_and_renormalize",
+            "restricted": "exclude_and_renormalize",
+        }
+        if self.routing_mode not in update_policy_by_routing:
             raise ValueError(
-                "federated.routing_mode must be 'unrestricted' or 'restricted'"
+                "federated.routing_mode must be 'unrestricted', "
+                "'uploader_renormalized', or 'restricted'"
             )
         if self.sample_weight_unit != "private_cases":
             raise ValueError(
                 "aggregation.sample_weight_unit must be 'private_cases'"
             )
-        expected_update_policy = (
-            "include_zero"
-            if self.routing_mode == "unrestricted"
-            else "exclude_and_renormalize"
-        )
+        expected_update_policy = update_policy_by_routing[self.routing_mode]
         if self.unoptimized_update_policy != expected_update_policy:
             raise ValueError(
                 "aggregation.unoptimized_update_policy must be "

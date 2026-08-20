@@ -88,6 +88,60 @@ def test_unrestricted_uses_all_active_sample_counts_for_missing_updates():
     }
 
 
+def test_uploader_renormalized_uses_upload_keys_without_modality_allowlist():
+    model = _AggregationModel()
+    aggregator = _aggregator(model)
+    round_global = _round_global(model)
+    name = "text_proj.weight"
+
+    aggregated = _aggregate(
+        aggregator,
+        round_global,
+        {
+            "client_1": _update(round_global, name, 16.0),
+            "client_2": _update(round_global, name, 100.0),
+            "client_3": {},
+        },
+        routing_mode="uploader_renormalized",
+    )
+
+    torch.testing.assert_close(
+        aggregated[name], torch.full_like(round_global[name], 72.0)
+    )
+    audit = aggregator._last_aggregation_audit["parameters"][name]
+    assert audit["uploaded_client_ids"] == ["client_1", "client_2"]
+    assert audit["eligible_client_ids"] == ["client_1", "client_2"]
+    assert audit["normalized_weights"] == {
+        "client_1": pytest.approx(1 / 3),
+        "client_2": pytest.approx(2 / 3),
+    }
+
+
+def test_uploader_renormalized_keeps_uploaded_zero_delta_in_denominator():
+    model = _AggregationModel()
+    aggregator = _aggregator(model)
+    round_global = _round_global(model)
+    name = "text_proj.weight"
+
+    aggregated = _aggregate(
+        aggregator,
+        round_global,
+        {
+            "client_1": _update(round_global, name, 16.0),
+            "client_2": {},
+            "client_3": _update(round_global, name, 10.0),
+        },
+        routing_mode="uploader_renormalized",
+    )
+
+    torch.testing.assert_close(
+        aggregated[name], torch.full_like(round_global[name], 11.5)
+    )
+    audit = aggregator._last_aggregation_audit["parameters"][name]
+    assert audit["eligible_client_ids"] == ["client_1", "client_3"]
+    assert audit["zero_update_client_ids"] == ["client_3"]
+
+
 def test_restricted_renormalizes_only_eligible_optimizer_uploaders():
     model = _AggregationModel()
     aggregator = _aggregator(model)
