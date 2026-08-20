@@ -248,3 +248,75 @@ def test_export_rejects_unrestricted_missing_upload_not_marked_zero(tmp_path: Pa
 
     with pytest.raises(ValueError, match="missing-upload client is not a zero update"):
         export_aggregation_audit(config_path)
+
+
+def test_export_accepts_uploader_renormalized_exact_uploader_denominator(
+    tmp_path: Path,
+):
+    commit = "c" * 40
+    history = _history(
+        commit,
+        "uploader_renormalized",
+        "text_proj.weight",
+        _parameter_entry(
+            group="TEXT_PARAMS",
+            uploaded=["client_1", "client_3"],
+            eligible=["client_1", "client_3"],
+            zero_update=["client_3"],
+            sample_weights={"client_1": 1, "client_3": 3},
+            normalized_weights={"client_1": 1 / 4, "client_3": 3 / 4},
+            empty=False,
+        ),
+    )
+    archive = tmp_path / "n.tar.gz"
+    _write_archive(
+        archive,
+        {
+            "formal.json": {
+                "status": "PASS",
+                "training_git_commit": commit,
+                "configuration": {
+                    "seed": 3407,
+                    "routing_mode": "uploader_renormalized",
+                },
+            },
+            "history.json": history,
+        },
+    )
+    config = {
+        "schema_version": 1,
+        "seed": 3407,
+        "expected_training_git_commit": commit,
+        "archive_root": str(tmp_path),
+        "clients": {
+            "client_1": "text_only",
+            "client_2": "image_only",
+            "client_3": "multimodal",
+        },
+        "sources": [
+            {
+                "cell": "N-FedAvg",
+                "archive": archive.name,
+                "formal_verification_member": "formal.json",
+                "training_history_member": "history.json",
+            }
+        ],
+        "output": {
+            "directory": str(tmp_path / "audit"),
+            "csv": "aggregation_audit.csv",
+            "jsonl": "aggregation_audit.jsonl",
+            "manifest": "manifest.json",
+        },
+    }
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    result = export_aggregation_audit(config_path)
+
+    records = [
+        json.loads(line)
+        for line in result.jsonl_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert records[0]["formula_branch"] == "uploader_renormalized_nonempty"
+    assert records[0]["actual_uploaders"] == ["client_1", "client_3"]
+    assert records[0]["denominator_clients"] == ["client_1", "client_3"]

@@ -148,6 +148,10 @@ def _require_weight_map(value: Any, field: str) -> dict[str, float]:
 def _formula_branch(routing_mode: str, empty_eligible: bool) -> str:
     if routing_mode == "unrestricted":
         return "eq5_unrestricted"
+    if routing_mode == "uploader_renormalized":
+        if empty_eligible:
+            return "uploader_renormalized_empty_preserve_global"
+        return "uploader_renormalized_nonempty"
     if empty_eligible:
         return "eq7_empty_preserve_global"
     return "eq7_restricted_nonempty"
@@ -225,6 +229,12 @@ def _parameter_record(
             raise ValueError(
                 f"{parameter_name} missing-upload client is not a zero update: "
                 f"{missing_not_zero}"
+            )
+    elif routing_mode == "uploader_renormalized":
+        if eligible != uploaded:
+            raise ValueError(
+                f"{parameter_name} uploader-renormalized denominator must equal "
+                "actual uploaders"
             )
     elif routing_mode == "restricted":
         if not eligible_set.issubset(uploaded_set):
@@ -582,6 +592,15 @@ def export_aggregation_audit(config_path: str | Path) -> ExportResult:
         "eq5_unrestricted_parameters": sum(
             record["formula_branch"] == "eq5_unrestricted" for record in all_records
         ),
+        "uploader_renormalized_nonempty_parameters": sum(
+            record["formula_branch"] == "uploader_renormalized_nonempty"
+            for record in all_records
+        ),
+        "uploader_renormalized_empty_preserve_global_parameters": sum(
+            record["formula_branch"]
+            == "uploader_renormalized_empty_preserve_global"
+            for record in all_records
+        ),
         "eq6_restricted_eligibility_parameters": sum(
             record["routing_mode"] == "restricted" for record in all_records
         ),
@@ -616,7 +635,7 @@ def export_aggregation_audit(config_path: str | Path) -> ExportResult:
             {
                 "path": "src/server.py",
                 "symbol": "CreamAggregator.aggregate_weights",
-                "role": "actual uploaders, U/R eligibility, zero updates, weights, and empty-set branch",
+                "role": "actual uploaders, U/N/R eligibility, zero updates, weights, and empty-set branch",
             },
             {
                 "path": "src/parameter_groups.py",
@@ -632,7 +651,13 @@ def export_aggregation_audit(config_path: str | Path) -> ExportResult:
         "sources": source_manifest,
         "formula_validation": {
             "status": "PASS",
-            "equations": ["Eq. (4)", "Eq. (5)", "Eq. (6)", "Eq. (7)"],
+            "equations": [
+                "Eq. (4)",
+                "Eq. (5)",
+                "Eq. (6)",
+                "Eq. (7)",
+                "manifest-defined uploader-renormalized diagnostic control",
+            ],
             "counts": formula_counts,
             "zero_update_semantics": {
                 "missing_upload": "eligible denominator client absent from actual uploaders",
