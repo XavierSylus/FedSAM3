@@ -75,13 +75,21 @@ def _reports(client_modalities):
     }
 
 
-def _aggregation_audit(routing_mode, client_modalities, eligible_client_ids):
+def _aggregation_audit(
+    routing_mode,
+    client_modalities,
+    eligible_client_ids,
+    uploaded_client_ids=None,
+):
+    if uploaded_client_ids is None:
+        uploaded_client_ids = eligible_client_ids
     return {
         "routing_mode": routing_mode,
         "active_client_ids": list(client_modalities),
         "parameters": {
             "medical_seg_head.weight": {
                 "parameter_group": IMAGE_PARAMS,
+                "uploaded_client_ids": uploaded_client_ids,
                 "eligible_client_ids": eligible_client_ids,
                 "normalized_weights": {
                     client_id: 1.0 / len(eligible_client_ids)
@@ -201,3 +209,34 @@ def test_unrestricted_marks_zero_update_client_eligible_and_aggregated():
     assert text_report["aggregated_count"] == 1
     assert text_report["aggregation_eligible"]
     assert text_report["aggregated"]
+
+
+def test_uploader_renormalized_uses_upload_audit_without_modality_filter():
+    client_modalities = {"text": "text_only", "image": "image_only"}
+    trainer = object.__new__(FederatedTrainer)
+    trainer.config = SimpleNamespace(routing_mode="uploader_renormalized")
+    finalized = trainer._finalize_parameter_group_effectiveness(
+        _reports(client_modalities),
+        client_modalities,
+        _aggregation_audit(
+            "uploader_renormalized",
+            client_modalities,
+            ["text"],
+        ),
+        {"medical_seg_head.weight": torch.zeros(2, 2)},
+    )
+
+    assert finalized["text"]["groups"][IMAGE_PARAMS]["aggregated"]
+
+    with pytest.raises(RuntimeError, match="non-uploader"):
+        trainer._finalize_parameter_group_effectiveness(
+            _reports(client_modalities),
+            client_modalities,
+            _aggregation_audit(
+                "uploader_renormalized",
+                client_modalities,
+                ["text", "image"],
+                uploaded_client_ids=["text"],
+            ),
+            {"medical_seg_head.weight": torch.zeros(2, 2)},
+        )

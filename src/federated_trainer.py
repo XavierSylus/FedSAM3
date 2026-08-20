@@ -268,6 +268,7 @@ class FederatedTrainer:
         ).lower()
         expected_policy = {
             "unrestricted": "include_zero",
+            "uploader_renormalized": "exclude_and_renormalize",
             "restricted": "exclude_and_renormalize",
         }
 
@@ -278,8 +279,8 @@ class FederatedTrainer:
             )
         if routing_mode not in expected_policy:
             raise ValueError(
-                "Federated protocol requires routing_mode 'unrestricted' or "
-                f"'restricted', got {routing_mode!r}"
+                "Federated protocol requires routing_mode 'unrestricted', "
+                f"'uploader_renormalized', or 'restricted', got {routing_mode!r}"
             )
         if sample_weight_unit != "private_cases":
             raise ValueError(
@@ -1332,12 +1333,21 @@ class FederatedTrainer:
                 raise RuntimeError(
                     f"Aggregation audit parameter group mismatch: {parameter_name}"
                 )
+            uploaded_client_ids = entry.get("uploaded_client_ids")
             eligible_client_ids = entry.get("eligible_client_ids")
             normalized_weights = entry.get("normalized_weights")
-            if not isinstance(eligible_client_ids, list) or not isinstance(normalized_weights, dict):
+            if (
+                not isinstance(uploaded_client_ids, list)
+                or not isinstance(eligible_client_ids, list)
+                or not isinstance(normalized_weights, dict)
+            ):
                 raise RuntimeError(f"Aggregation audit entry is incomplete: {parameter_name}")
+            if len(uploaded_client_ids) != len(set(uploaded_client_ids)):
+                raise RuntimeError(f"Aggregation audit has duplicate uploader: {parameter_name}")
             if len(eligible_client_ids) != len(set(eligible_client_ids)):
                 raise RuntimeError(f"Aggregation audit has duplicate eligible client: {parameter_name}")
+            if not set(uploaded_client_ids).issubset(active_client_ids):
+                raise RuntimeError(f"Aggregation audit has unknown uploader: {parameter_name}")
             if not set(eligible_client_ids).issubset(active_client_ids):
                 raise RuntimeError(f"Aggregation audit has unknown eligible client: {parameter_name}")
             if routing_mode == "unrestricted":
@@ -1345,14 +1355,27 @@ class FederatedTrainer:
                     raise RuntimeError(
                         f"Unrestricted aggregation excluded an active client: {parameter_name}"
                     )
-            else:
+            elif routing_mode == "uploader_renormalized":
+                if set(eligible_client_ids) != set(uploaded_client_ids):
+                    raise RuntimeError(
+                        "Uploader-renormalized aggregation admitted a non-uploader "
+                        f"or excluded an uploader: {parameter_name}"
+                    )
+            elif routing_mode == "restricted":
                 allowed = allowed_modalities(parameter_group)
-                for client_id in eligible_client_ids:
-                    if client_modalities[client_id] not in allowed:
-                        raise RuntimeError(
-                            "Restricted aggregation admitted a routing-ineligible client: "
-                            f"{client_id}:{parameter_name}"
-                        )
+                compatible_uploaders = {
+                    client_id
+                    for client_id in uploaded_client_ids
+                    if client_modalities[client_id] in allowed
+                }
+                if set(eligible_client_ids) != compatible_uploaders:
+                    raise RuntimeError(
+                        "Restricted aggregation admitted a routing-ineligible client "
+                        "or excluded a compatible uploader: "
+                        f"{parameter_name}"
+                    )
+            else:
+                raise RuntimeError(f"Unknown aggregation routing mode: {routing_mode}")
             if set(normalized_weights) != set(eligible_client_ids):
                 raise RuntimeError(f"Aggregation weights do not match eligible clients: {parameter_name}")
 

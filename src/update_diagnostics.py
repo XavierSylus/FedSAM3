@@ -250,7 +250,11 @@ def _validate_aggregation_audit(
     aggregation_audit: Mapping[str, Any],
 ) -> Mapping[str, Mapping[str, Any]]:
     routing_mode = aggregation_audit.get("routing_mode")
-    if routing_mode not in {"unrestricted", "restricted"}:
+    if routing_mode not in {
+        "unrestricted",
+        "uploader_renormalized",
+        "restricted",
+    }:
         raise ValueError("Aggregation audit has an invalid routing mode")
     active_client_ids = aggregation_audit.get("active_client_ids")
     audit_sample_counts = aggregation_audit.get("client_sample_counts")
