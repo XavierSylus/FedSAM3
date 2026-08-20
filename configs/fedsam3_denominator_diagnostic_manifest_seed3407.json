@@ -73,6 +73,7 @@
     "modality_whitelist": "R - N",
     "total_routing_difference": "R - U"
   },
+  "results_dir": "/root/autodl-tmp/FedSAM3-Cream/experiments/logs/fedsam3_denominator_diagnostic_seed3407/comparison",
   "required_outputs": {
     "training": ["console.log", "training_history.json", "run_metadata.json"],
     "aggregation": ["parameter_group_diagnostics.csv", "parameter_group_diagnostics.jsonl", "parameter_group_effectiveness.jsonl"],
