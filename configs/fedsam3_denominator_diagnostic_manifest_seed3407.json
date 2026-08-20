@@ -1,0 +1,88 @@
+{
+  "manifest_schema_version": 1,
+  "protocol": "single-seed decomposition of denominator dilution and modality whitelist",
+  "seed": 3407,
+  "purpose": "Separate actual-uploader denominator renormalization from modality-whitelist filtering in the U-to-R difference.",
+  "fixed_controls": {
+    "data_root": "/autodl-fs/data/FedSAM3-Cream/datasets/federated_split",
+    "active_clients": ["client_1", "client_2", "client_3"],
+    "aggregation_method": "fedavg",
+    "sample_weight_unit": "private_cases",
+    "rounds": 60,
+    "local_epochs": 1,
+    "client_init_policy": "round_global",
+    "persist_client_optimizer": false,
+    "text_loss": "prototype_logistic, temperature 0.07",
+    "segmentation_loss": "DiceLoss + BCEWithLogitsLoss",
+    "multimodal_loss": "L_seg + 0.1 * L_cream",
+    "empty_region_metrics": "existing fixed Dice, IoU, and HD95 rules",
+    "brats_label_mapping": "existing bidirectional 0/1/2/4 and WT/TC/ET contract",
+    "upload_boundary": "active optimizer named parameters only; buffers remain server-owned",
+    "client_order": ["client_1", "client_2", "client_3"],
+    "reproducibility": {
+      "mode": "best_effort_cuda",
+      "deterministic_algorithms": true,
+      "deterministic_warn_only": true,
+      "num_workers": 0,
+      "persistent_workers": false,
+      "runtime_record": ["random_seed", "environment", "git_commit"]
+    }
+  },
+  "parameterwise_contract": {
+    "client_delta": "Delta_{k,p} = theta_{k,p} - theta_p^t",
+    "U": {
+      "eligible_clients": "all active clients",
+      "formula": "Delta_p^U = sum_k(n_k * Delta_{k,p}) / sum_k(n_k), with a missing upload treated as Delta_{k,p}=0"
+    },
+    "N": {
+      "eligible_clients": "actual uploaders of parameter p, without reading modality",
+      "formula": "Delta_p^N = sum_{k:p uploaded}(n_k * Delta_{k,p}) / sum_{k:p uploaded}n_k",
+      "numeric_zero_rule": "an uploaded parameter remains eligible when its numerical delta is zero",
+      "empty_uploader_rule": "preserve theta_p^t and record an audit event"
+    },
+    "R": {
+      "eligible_clients": "actual uploaders of parameter p whose modality is allowed for G(p)",
+      "formula": "Delta_p^R = sum_{k:p uploaded and modality-compatible}(n_k * Delta_{k,p}) / sum_{k:p uploaded and modality-compatible}n_k"
+    }
+  },
+  "cells": [
+    {
+      "label": "U",
+      "cell": "U-FedAvg",
+      "routing_mode": "unrestricted",
+      "config": "configs/fedsam3_2x2_u_fedavg.yaml",
+      "log_dir": "/root/autodl-tmp/FedSAM3-Cream/experiments/logs/fedsam3_2x2/u_fedavg"
+    },
+    {
+      "label": "N",
+      "cell": "N-FedAvg",
+      "routing_mode": "uploader_renormalized",
+      "config": "configs/fedsam3_denominator_diagnostic_seed3407_n_fedavg.yaml",
+      "log_dir": "/root/autodl-tmp/FedSAM3-Cream/experiments/logs/fedsam3_denominator_diagnostic_seed3407/n_fedavg"
+    },
+    {
+      "label": "R",
+      "cell": "R-FedAvg",
+      "routing_mode": "restricted",
+      "config": "configs/fedsam3_2x2_r_fedavg.yaml",
+      "log_dir": "/root/autodl-tmp/FedSAM3-Cream/experiments/logs/fedsam3_2x2/r_fedavg"
+    }
+  ],
+  "effect_decomposition": {
+    "denominator_dilution": "N - U",
+    "modality_whitelist": "R - N",
+    "total_routing_difference": "R - U"
+  },
+  "required_outputs": {
+    "training": ["console.log", "training_history.json", "run_metadata.json"],
+    "aggregation": ["parameter_group_diagnostics.csv", "parameter_group_diagnostics.jsonl", "parameter_group_effectiveness.jsonl"],
+    "verification": ["formal_verification.json", "final_metrics.csv", "round_metrics.csv"],
+    "comparison": ["U/N/R final metrics", "N-U", "R-N", "R-U", "per-group uploaders and normalized weights"]
+  },
+  "acceptance": {
+    "valid_upload_contract_requires_n_equals_r": true,
+    "aggregation_level": "N and R must have identical eligible uploaders, normalized weights, and aggregated parameters for every valid optimizer-scoped upload payload",
+    "training_level": "compare N and R round-level and final metrics under the declared best-effort CUDA reproducibility boundary",
+    "interpretation": "attribute N-U to missing-upload denominator dilution and R-N to additional modality-whitelist filtering"
+  }
+}
