@@ -191,11 +191,6 @@ def generate(evidence_root: Path) -> dict[str, Any]:
     ]
     (results_dir / "README.md").write_text("\n".join(readme), encoding="utf-8")
 
-    manifest_csv = results_dir / "file_manifest.csv"
-    manifest_json = results_dir / "file_manifest.json"
-    files = _file_manifest(evidence_root, (manifest_csv, manifest_json))
-    _write_csv(manifest_csv, files)
-    _write_json(manifest_json, files)
     result = {
         "status": "GENERATED",
         "evidence_root": str(evidence_root),
@@ -203,10 +198,14 @@ def generate(evidence_root: Path) -> dict[str, Any]:
         "group_rows": len(summaries),
         "paired_rows": len(effects),
         "paper_value_rows": len(formatted),
-        "manifest_entries": len(files),
     }
     _write_json(results_dir / "generation_status.json", result)
-    return result
+    manifest_csv = results_dir / "file_manifest.csv"
+    manifest_json = results_dir / "file_manifest.json"
+    files = _file_manifest(evidence_root, (manifest_csv, manifest_json))
+    _write_csv(manifest_csv, files)
+    _write_json(manifest_json, files)
+    return {**result, "manifest_entries": len(files)}
 
 
 def build_parser() -> argparse.ArgumentParser:

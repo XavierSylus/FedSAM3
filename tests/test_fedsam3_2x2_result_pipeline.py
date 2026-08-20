@@ -183,3 +183,16 @@ def test_summary_uses_sample_sd_and_paired_hd95_direction():
     assert summaries[0]["dice_sample_sd"] == pytest.approx(0.1)
     assert effects[0]["dice_improvement"] == pytest.approx(0.2)
     assert effects[0]["hd95_mm_improvement"] == pytest.approx(20.0)
+
+
+def test_file_manifest_includes_status_but_excludes_manifest_itself(tmp_path):
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    status_path = results_dir / "generation_status.json"
+    status_path.write_text('{"status":"GENERATED"}\n', encoding="utf-8")
+    manifest_csv = results_dir / "file_manifest.csv"
+    manifest_json = results_dir / "file_manifest.json"
+
+    rows = generator._file_manifest(tmp_path, (manifest_csv, manifest_json))
+
+    assert [row["path"] for row in rows] == ["results/generation_status.json"]
